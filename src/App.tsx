@@ -53,18 +53,37 @@ const STATUS_COLOR: Record<ConnStatus, string> = {
   error:      '#dc2626',   // red
 }
 
+const STATUS_TEXT: Record<ConnStatus, string> = {
+  local:      'Local',
+  connecting: '…',
+  ok:         'Live',
+  error:      'Error',
+}
+
 function ConnectionBadge() {
   const status = useSupabaseStatus()
+  const color  = STATUS_COLOR[status]
   return (
     <div
       title={STATUS_LABEL[status]}
+      className="flex items-center gap-1 shrink-0 select-none"
       style={{
-        width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
-        background: STATUS_COLOR[status],
-        boxShadow: status === 'ok' ? `0 0 0 2px ${STATUS_COLOR.ok}30` : 'none',
-        transition: 'background 0.3s',
+        fontSize: 10, fontWeight: 600,
+        padding: '2px 6px', borderRadius: 999,
+        border: `0.5px solid ${color}50`,
+        background: color + '18',
+        color,
+        transition: 'all 0.3s',
+        whiteSpace: 'nowrap',
       }}
-    />
+    >
+      <span style={{
+        width: 5, height: 5, borderRadius: '50%', background: color, flexShrink: 0,
+        // pulse animation while connecting
+        animation: status === 'connecting' ? 'pulse 1.2s ease-in-out infinite' : 'none',
+      }} />
+      {STATUS_TEXT[status]}
+    </div>
   )
 }
 
