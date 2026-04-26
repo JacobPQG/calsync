@@ -17,6 +17,56 @@ import { copyShareUrl }           from './sharing/urlState'
 import { downloadIcal, parseIcal } from './ical/icalUtils'
 import { useAuthSession }         from './auth/useAuth'
 import { AuthModal }              from './auth/AuthModal'
+import { supabase, SUPABASE_ENABLED } from './lib/supabase'
+
+// ── Connection status ─────────────────────────────────────────────────────────
+// Pings Supabase once on mount with a lightweight HEAD query. Returns:
+//   'local'      — env vars absent; app is in localStorage-only mode
+//   'connecting' — ping in flight
+//   'ok'         — Supabase responded without error
+//   'error'      — configured but unreachable / credentials wrong
+type ConnStatus = 'local' | 'connecting' | 'ok' | 'error'
+
+function useSupabaseStatus(): ConnStatus {
+  const [status, setStatus] = useState<ConnStatus>(
+    SUPABASE_ENABLED ? 'connecting' : 'local'
+  )
+  useEffect(() => {
+    if (!SUPABASE_ENABLED) return
+    supabase.from('users').select('id', { count: 'exact', head: true })
+      .then(({ error }) => setStatus(error ? 'error' : 'ok'))
+      .catch(() => setStatus('error'))
+  }, [])
+  return status
+}
+
+const STATUS_LABEL: Record<ConnStatus, string> = {
+  local:      'localStorage mode — no Supabase configured',
+  connecting: 'Connecting to Supabase…',
+  ok:         'Supabase connected',
+  error:      'Supabase connection failed — check console',
+}
+const STATUS_COLOR: Record<ConnStatus, string> = {
+  local:      '#635f57',   // --text-muted
+  connecting: '#b45309',   // amber
+  ok:         '#16a34a',   // green
+  error:      '#dc2626',   // red
+}
+
+function ConnectionBadge() {
+  const status = useSupabaseStatus()
+  return (
+    <div
+      title={STATUS_LABEL[status]}
+      style={{
+        width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+        background: STATUS_COLOR[status],
+        boxShadow: status === 'ok' ? `0 0 0 2px ${STATUS_COLOR.ok}30` : 'none',
+        transition: 'background 0.3s',
+      }}
+    />
+  )
+}
 
 const MAX_ICAL_IMPORT = 200
 
@@ -132,9 +182,11 @@ export default function App() {
         }}
       >
         <span className="font-semibold text-sm tracking-tight select-none shrink-0"
-          style={{ color: 'var(--text)', marginRight: 4 }}>
+          style={{ color: 'var(--text)' }}>
           CalSync
         </span>
+
+        <ConnectionBadge />
 
         <div className="h-4 w-px mx-0.5 shrink-0" style={{ background: 'var(--border)' }} />
 
