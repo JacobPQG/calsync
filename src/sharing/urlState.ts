@@ -39,13 +39,42 @@ export function encodeState(users: User[], events: CalEvent[]): string {
 
 // ── Decode ────────────────────────────────────────────────────────────────────
 
-// Parse shared state from the current URL hash. Returns null if absent/corrupt.
+// Runtime shape validation — the TypeScript cast does nothing at runtime, so
+// we must check the structure ourselves before accepting URL-provided data.
+// This prevents a malformed share link from crashing the store or bypassing
+// downstream safeUrl() checks (e.g. smuggling a non-string into an href).
+function isValidSharedState(raw: unknown): raw is ShareableState {
+  if (!raw || typeof raw !== 'object') return false
+  const s = raw as Record<string, unknown>
+  if (!Array.isArray(s.users) || !Array.isArray(s.events)) return false
+
+  return (
+    s.users.every(u =>
+      u && typeof u === 'object' &&
+      typeof (u as Record<string, unknown>).id    === 'string' &&
+      typeof (u as Record<string, unknown>).name  === 'string' &&
+      typeof (u as Record<string, unknown>).color === 'string'
+    ) &&
+    s.events.every(e =>
+      e && typeof e === 'object' &&
+      typeof (e as Record<string, unknown>).id     === 'string' &&
+      typeof (e as Record<string, unknown>).userId === 'string' &&
+      typeof (e as Record<string, unknown>).title  === 'string' &&
+      typeof (e as Record<string, unknown>).date   === 'string'
+    )
+  )
+}
+
+// Parse shared state from the current URL hash. Returns null if absent/corrupt/invalid.
 export function decodeStateFromUrl(): ShareableState | null {
   try {
     const hash  = window.location.hash
     const match = hash.match(/^#share=(.+)$/)
     if (!match) return null
-    return JSON.parse(base64UrlToUtf8(match[1])) as ShareableState
+    const parsed = JSON.parse(base64UrlToUtf8(match[1]))
+    // Reject anything that doesn't conform to the expected shape.
+    if (!isValidSharedState(parsed)) return null
+    return parsed
   } catch {
     return null
   }

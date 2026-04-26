@@ -17,6 +17,7 @@ import type { EventInstance } from '../types'
 import { useStore }          from '../store/useStore'
 import { buildDaySummaries } from '../engine/recurrence'
 import { EventForm }         from '../forms/EventForm'
+import { safeUrl }           from '../utils/safeUrl'
 
 // Timeline configuration
 const FIRST_HOUR  = 6    // 6 AM  — earliest visible row
@@ -317,11 +318,15 @@ function EventDetail({ instance, onDelete }: EventDetailProps) {
   const relativeTime = formatDistanceToNow(eventStart, { addSuffix: true })
   const isUpcoming   = isFuture(eventStart)
 
-  // Resolve the Google Maps URL: prefer the stored mapsUrl, fall back to
-  // constructing a query from address or location name.
-  const mapsQuery = event.location?.address || event.location?.name
-  const mapsUrl   = event.location?.mapsUrl
+  // Resolve the maps URL. The user-supplied mapsUrl is run through safeUrl()
+  // to block javascript: / data: URIs before it reaches any href attribute.
+  // The fallback (constructed from address/name) uses a hardcoded https: prefix
+  // so it is always safe; safeUrl() is still applied for consistency.
+  const mapsQuery     = event.location?.address || event.location?.name
+  const rawMapsUrl    = event.location?.mapsUrl
     ?? (mapsQuery ? `https://maps.google.com/?q=${encodeURIComponent(mapsQuery)}` : null)
+  const mapsUrl       = safeUrl(rawMapsUrl)
+  const safeEventUrl  = safeUrl(event.eventUrl)
 
   return (
     <div className="p-4 space-y-5">
@@ -422,17 +427,18 @@ function EventDetail({ instance, onDelete }: EventDetailProps) {
       )}
 
       {/* ── Event URL ─────────────────────────────────────────────────── */}
-      {event.eventUrl && (
+      {/* safeEventUrl is undefined for any non-http(s) scheme (javascript:, data:, etc.) */}
+      {safeEventUrl && (
         <div>
           <div className="field-label">Event link</div>
           <a
-            href={event.eventUrl}
+            href={safeEventUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="text-xs break-all"
             style={{ color: 'var(--accent)' }}
           >
-            {event.eventUrl}
+            {safeEventUrl}
           </a>
         </div>
       )}

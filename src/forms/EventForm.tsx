@@ -12,6 +12,7 @@
 import { useState } from 'react'
 import type { RecurringRule } from '../types'
 import { useStore } from '../store/useStore'
+import { urlValidationError } from '../utils/safeUrl'
 
 interface Props {
   date:    string   // ISO date string for the initial occurrence
@@ -77,6 +78,9 @@ export function EventForm({ date, onClose }: Props) {
 
   function submit() {
     if (!title.trim()) return
+    // Block submission if either URL field contains a dangerous scheme.
+    if (eventUrl && urlValidationError(eventUrl)) return
+    if (locationMapsUrl && urlValidationError(locationMapsUrl)) return
     addEvent({
       userId:    activeUserId,
       title:     title.trim(),
@@ -270,7 +274,7 @@ export function EventForm({ date, onClose }: Props) {
             />
           </div>
 
-          {/* External event URL */}
+          {/* External event URL — validated to block javascript: and data: URIs */}
           <div>
             <label className="field-label">Event link</label>
             <input
@@ -279,6 +283,11 @@ export function EventForm({ date, onClose }: Props) {
               value={eventUrl}
               onChange={e => setEventUrl(e.target.value)}
             />
+            {eventUrl && urlValidationError(eventUrl) && (
+              <p className="text-xs mt-1" style={{ color: '#dc2626' }}>
+                {urlValidationError(eventUrl)}
+              </p>
+            )}
           </div>
         </div>
 
