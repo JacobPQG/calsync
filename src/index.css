@@ -1,29 +1,220 @@
 
 @import "tailwindcss";
 
+/* ─── Design tokens ───────────────────────────────────────────────────────────
+   CSS custom properties define the visual language for the entire app.
+   Change these to retheme everything in one place.
+   Naming: --cal-<role> keeps tokens clearly scoped to this project. */
+:root {
+  /* Background hierarchy — warm off-white, like quality paper */
+  --bg-base:        #f8f7f4;
+  --bg-surface:     #ffffff;
+  --bg-subtle:      #f3f2ef;
+  --bg-hover:       #edece9;
+
+  /* Borders */
+  --border:         #e5e2dc;
+  --border-strong:  #ccc9c2;
+
+  /* Text */
+  --text:           #1a1917;
+  --text-2:         #6b6863;
+  --text-muted:     #a09d98;
+
+  /* Accent — indigo, used sparingly for today / selected / interactive */
+  --accent:         #5046e5;
+  --accent-bg:      #ede9fe;
+  --accent-light:   #f5f3ff;
+
+  /* Calendar: today indicator */
+  --today-fill:     #5046e5;
+  --today-text:     #ffffff;
+
+  /* Calendar: overlap / availability indicator (green) */
+  --overlap-bg:     #f0fdf4;
+  --overlap-border: #a7f3d0;
+  --overlap-text:   #166534;
+
+  /* Shadows */
+  --shadow-xs:  0 1px 2px rgba(0,0,0,.05);
+  --shadow-sm:  0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.05);
+  --shadow-md:  0 4px 8px rgba(0,0,0,.09), 0 2px 4px rgba(0,0,0,.06);
+  --shadow-lg:  0 12px 24px rgba(0,0,0,.1), 0 4px 8px rgba(0,0,0,.06);
+  --shadow-xl:  0 20px 40px rgba(0,0,0,.12), 0 8px 16px rgba(0,0,0,.07);
+}
+
+/* ─── Base reset ──────────────────────────────────────────────────────────────
+   Apply background, color, and font to the whole document. Using the system
+   font stack gives native-quality rendering on every OS with no network cost. */
+html, body, #root {
+  height: 100%;
+  background: var(--bg-base);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+               Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+/* ─── Scrollbar styling (WebKit) ──────────────────────────────────────────────
+   Thin, unobtrusive scrollbars that match the neutral palette. */
+::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 9px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ─── Tailwind component layer ────────────────────────────────────────────────
+   Custom CSS classes used throughout the app. Putting them in @layer components
+   keeps Tailwind's specificity rules: utility classes can still override them. */
 @layer components {
+
+  /* ── Calendar day cell ──────────────────────────────────────────────────── */
   .day-cell {
-    border: 0.5px solid #e5e7eb;
-    border-radius: 8px;
-    padding: 6px;
+    position: relative;
+    border: 0.5px solid var(--border);
+    border-radius: 7px;
+    padding: 5px 5px 4px;
     cursor: pointer;
-    transition: border-color 0.15s;
-    min-height: 52px;
+    transition: border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+    min-height: 70px;
+    background: var(--bg-surface);
+    overflow: hidden;
   }
-  .day-cell:hover { border-color: #d1d5db; }
-  .field-label { display: block; font-size: 12px; color: #9ca3af; margin-bottom: 4px; }
+  .day-cell:hover {
+    border-color: var(--border-strong);
+    background: var(--bg-subtle);
+  }
+
+  /* Today: accent-colored ring */
+  .day-cell.is-today {
+    border-color: var(--accent);
+    border-width: 1px;
+  }
+
+  /* Selected: accent fill + ring */
+  .day-cell.is-selected {
+    border-color: var(--accent);
+    border-width: 1px;
+    background: var(--accent-light);
+    box-shadow: 0 0 0 2px var(--accent-bg);
+  }
+
+  /* Overlap: soft green tint — 2+ users available this day */
+  .day-cell.is-overlap:not(.is-selected) {
+    background: var(--overlap-bg);
+    border-color: var(--overlap-border);
+  }
+
+  /* Out-of-month: dimmed */
+  .day-cell.out-of-month {
+    opacity: 0.32;
+    pointer-events: none;
+  }
+
+  /* ── Event chip (inside day cell) ───────────────────────────────────────── */
+  .event-chip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 5px 2px 4px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 500;
+    line-height: 1.35;
+    margin-top: 2px;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .event-chip-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  /* ── Form fields ────────────────────────────────────────────────────────── */
+  .field-label {
+    display: block;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 5px;
+  }
   .field-input {
-    width: 100%; font-size: 14px; border: 0.5px solid #e5e7eb;
-    border-radius: 8px; padding: 6px 12px;
+    width: 100%;
+    font-size: 13.5px;
+    border: 0.5px solid var(--border);
+    border-radius: 7px;
+    padding: 7px 11px;
+    background: var(--bg-surface);
+    color: var(--text);
+    transition: border-color 0.12s, box-shadow 0.12s;
+    appearance: none;
   }
-  .field-input:focus { outline: none; box-shadow: 0 0 0 2px #a5b4fc; }
+  .field-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-bg);
+  }
+  .field-input::placeholder {
+    color: var(--text-muted);
+  }
+
+  /* ── Navigation buttons (month prev / next / today) ─────────────────────── */
   .btn-nav {
-    width: 28px; height: 28px; border-radius: 6px;
-    border: 0.5px solid #e5e7eb; font-size: 14px;
-    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    border: 0.5px solid var(--border);
+    font-size: 15px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    background: var(--bg-surface);
+    color: var(--text-2);
+    transition: background 0.1s, border-color 0.1s, color 0.1s;
+    user-select: none;
   }
-  .btn-nav:hover { background: #f9fafb; }
-  .text-muted { color: #9ca3af; }
-  .bg-surface { background: #f9fafb; }
-  .border-divider { border-color: #f3f4f6; }
+  .btn-nav:hover {
+    background: var(--bg-subtle);
+    border-color: var(--border-strong);
+    color: var(--text);
+  }
+  .btn-nav:active {
+    background: var(--bg-hover);
+  }
+
+  /* ── Toolbar icon-text buttons ──────────────────────────────────────────── */
+  .btn-toolbar {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 0.5px solid var(--border);
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--text-2);
+    background: var(--bg-surface);
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s, color 0.1s;
+    white-space: nowrap;
+  }
+  .btn-toolbar:hover {
+    background: var(--bg-subtle);
+    border-color: var(--border-strong);
+    color: var(--text);
+  }
+
+  /* ── Utility semantic aliases ───────────────────────────────────────────── */
+  .text-muted     { color: var(--text-muted); }
+  .bg-surface     { background: var(--bg-surface); }
+  .border-divider { border-color: var(--border); }
 }
