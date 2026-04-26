@@ -2,74 +2,100 @@
 @import "tailwindcss";
 
 /* ─── Design tokens ───────────────────────────────────────────────────────────
-   CSS custom properties define the visual language for the entire app.
-   Change these to retheme everything in one place.
-   Naming: --cal-<role> keeps tokens clearly scoped to this project. */
+   All colours, shadows and radii live here. Two themes are defined:
+     :root           — dark (default, applied immediately; no flash of light)
+     [data-theme="light"] — light override, toggled by the sun/moon button.
+   Components use only var(--…) — never raw colour values — so the theme
+   switch is instant and applies everywhere. */
+
 :root {
-  /* Background hierarchy — warm off-white, like quality paper */
+  /* Dark theme ── warm, premium notebook feel */
+  --bg-base:        #111009;
+  --bg-surface:     #1b1914;
+  --bg-subtle:      #232018;
+  --bg-hover:       #2c2a20;
+
+  --border:         #302e25;
+  --border-strong:  #403d32;
+
+  --text:           #e8e4db;
+  --text-2:         #9e9a91;
+  --text-muted:     #635f57;
+
+  --accent:         #8077f5;   /* slightly lighter for dark bg readability */
+  --accent-bg:      #1d1944;
+  --accent-light:   #13103a;
+
+  --today-fill:     #8077f5;
+  --today-text:     #ffffff;
+
+  --overlap-bg:     #0b1f11;
+  --overlap-border: #1a4a27;
+  --overlap-text:   #4ade80;
+
+  --shadow-xs: 0 1px 2px rgba(0,0,0,.25);
+  --shadow-sm: 0 1px 3px rgba(0,0,0,.35), 0 1px 2px rgba(0,0,0,.2);
+  --shadow-md: 0 4px 8px rgba(0,0,0,.4),  0 2px 4px rgba(0,0,0,.25);
+  --shadow-lg: 0 12px 24px rgba(0,0,0,.5),0 4px 8px rgba(0,0,0,.3);
+  --shadow-xl: 0 20px 40px rgba(0,0,0,.55),0 8px 16px rgba(0,0,0,.35);
+}
+
+/* Light theme override — activated by data-theme="light" on <html> */
+[data-theme="light"] {
   --bg-base:        #f8f7f4;
   --bg-surface:     #ffffff;
   --bg-subtle:      #f3f2ef;
   --bg-hover:       #edece9;
 
-  /* Borders */
   --border:         #e5e2dc;
   --border-strong:  #ccc9c2;
 
-  /* Text */
   --text:           #1a1917;
   --text-2:         #6b6863;
   --text-muted:     #a09d98;
 
-  /* Accent — indigo, used sparingly for today / selected / interactive */
   --accent:         #5046e5;
   --accent-bg:      #ede9fe;
   --accent-light:   #f5f3ff;
 
-  /* Calendar: today indicator */
   --today-fill:     #5046e5;
   --today-text:     #ffffff;
 
-  /* Calendar: overlap / availability indicator (green) */
   --overlap-bg:     #f0fdf4;
   --overlap-border: #a7f3d0;
   --overlap-text:   #166534;
 
-  /* Shadows */
-  --shadow-xs:  0 1px 2px rgba(0,0,0,.05);
-  --shadow-sm:  0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.05);
-  --shadow-md:  0 4px 8px rgba(0,0,0,.09), 0 2px 4px rgba(0,0,0,.06);
-  --shadow-lg:  0 12px 24px rgba(0,0,0,.1), 0 4px 8px rgba(0,0,0,.06);
-  --shadow-xl:  0 20px 40px rgba(0,0,0,.12), 0 8px 16px rgba(0,0,0,.07);
+  --shadow-xs: 0 1px 2px rgba(0,0,0,.05);
+  --shadow-sm: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.05);
+  --shadow-md: 0 4px 8px rgba(0,0,0,.09), 0 2px 4px rgba(0,0,0,.06);
+  --shadow-lg: 0 12px 24px rgba(0,0,0,.1),0 4px 8px rgba(0,0,0,.06);
+  --shadow-xl: 0 20px 40px rgba(0,0,0,.12),0 8px 16px rgba(0,0,0,.07);
 }
 
-/* ─── Base reset ──────────────────────────────────────────────────────────────
-   Apply background, color, and font to the whole document. Using the system
-   font stack gives native-quality rendering on every OS with no network cost. */
+/* ─── Base ────────────────────────────────────────────────────────────────────
+   Apply tokens to the full page. font-variant-numeric: tabular-nums keeps
+   calendar dates from shifting width as numbers change. */
 html, body, #root {
   height: 100%;
   background: var(--bg-base);
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
                Roboto, Helvetica, Arial, sans-serif;
+  font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-*, *::before, *::after {
-  box-sizing: border-box;
-}
+*, *::before, *::after { box-sizing: border-box; }
 
-/* ─── Scrollbar styling (WebKit) ──────────────────────────────────────────────
-   Thin, unobtrusive scrollbars that match the neutral palette. */
-::-webkit-scrollbar       { width: 6px; height: 6px; }
+/* Thin, unobtrusive scrollbars */
+::-webkit-scrollbar       { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 9px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
-/* ─── Tailwind component layer ────────────────────────────────────────────────
-   Custom CSS classes used throughout the app. Putting them in @layer components
-   keeps Tailwind's specificity rules: utility classes can still override them. */
+/* ─── Component layer ─────────────────────────────────────────────────────────
+   @layer keeps specificity below Tailwind utilities so className overrides work. */
 @layer components {
 
   /* ── Calendar day cell ──────────────────────────────────────────────────── */
@@ -79,141 +105,81 @@ html, body, #root {
     border-radius: 7px;
     padding: 5px 5px 4px;
     cursor: pointer;
-    transition: border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
-    min-height: 70px;
+    transition: border-color .12s, background .12s, box-shadow .12s;
     background: var(--bg-surface);
     overflow: hidden;
   }
-  .day-cell:hover {
-    border-color: var(--border-strong);
-    background: var(--bg-subtle);
-  }
-
-  /* Today: accent-colored ring */
-  .day-cell.is-today {
-    border-color: var(--accent);
-    border-width: 1px;
-  }
-
-  /* Selected: accent fill + ring */
-  .day-cell.is-selected {
-    border-color: var(--accent);
-    border-width: 1px;
+  .day-cell:hover          { border-color: var(--border-strong); background: var(--bg-subtle); }
+  .day-cell.is-today       { border-color: var(--accent); border-width: 1px; }
+  .day-cell.is-selected    {
+    border-color: var(--accent); border-width: 1px;
     background: var(--accent-light);
     box-shadow: 0 0 0 2px var(--accent-bg);
   }
-
-  /* Overlap: soft green tint — 2+ users available this day */
   .day-cell.is-overlap:not(.is-selected) {
     background: var(--overlap-bg);
     border-color: var(--overlap-border);
   }
+  .day-cell.out-of-month   { opacity: .28; pointer-events: none; }
 
-  /* Out-of-month: dimmed */
-  .day-cell.out-of-month {
-    opacity: 0.32;
-    pointer-events: none;
-  }
-
-  /* ── Event chip (inside day cell) ───────────────────────────────────────── */
+  /* ── Event chip (compact row inside day cell) ───────────────────────────── */
   .event-chip {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 5px 2px 4px;
-    border-radius: 4px;
-    font-size: 10px;
-    font-weight: 500;
-    line-height: 1.35;
-    margin-top: 2px;
-    overflow: hidden;
-    white-space: nowrap;
+    display: flex; align-items: center; gap: 4px;
+    padding: 2px 5px 2px 4px; border-radius: 4px;
+    font-size: 10px; font-weight: 500; line-height: 1.35;
+    margin-top: 2px; overflow: hidden; white-space: nowrap;
   }
-  .event-chip-dot {
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
+  .event-chip-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
 
   /* ── Form fields ────────────────────────────────────────────────────────── */
   .field-label {
-    display: block;
-    font-size: 10.5px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    margin-bottom: 5px;
+    display: block; font-size: 10.5px; font-weight: 600;
+    letter-spacing: .06em; text-transform: uppercase;
+    color: var(--text-muted); margin-bottom: 5px;
   }
   .field-input {
-    width: 100%;
-    font-size: 13.5px;
-    border: 0.5px solid var(--border);
-    border-radius: 7px;
-    padding: 7px 11px;
-    background: var(--bg-surface);
-    color: var(--text);
-    transition: border-color 0.12s, box-shadow 0.12s;
-    appearance: none;
+    width: 100%; font-size: 13.5px;
+    border: 0.5px solid var(--border); border-radius: 7px;
+    padding: 7px 11px; background: var(--bg-surface); color: var(--text);
+    transition: border-color .12s, box-shadow .12s; appearance: none;
   }
   .field-input:focus {
-    outline: none;
-    border-color: var(--accent);
+    outline: none; border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-bg);
   }
-  .field-input::placeholder {
-    color: var(--text-muted);
+  .field-input::placeholder { color: var(--text-muted); }
+  /* Dark-mode: browser's native select arrow is invisible — use a custom one */
+  select.field-input {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23635f57' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 28px;
   }
 
-  /* ── Navigation buttons (month prev / next / today) ─────────────────────── */
+  /* ── Navigation buttons ─────────────────────────────────────────────────── */
   .btn-nav {
-    width: 28px;
-    height: 28px;
-    border-radius: 6px;
-    border: 0.5px solid var(--border);
-    font-size: 15px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    background: var(--bg-surface);
-    color: var(--text-2);
-    transition: background 0.1s, border-color 0.1s, color 0.1s;
-    user-select: none;
+    width: 28px; height: 28px; border-radius: 6px;
+    border: 0.5px solid var(--border); font-size: 15px;
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer; background: var(--bg-surface); color: var(--text-2);
+    transition: background .1s, border-color .1s, color .1s; user-select: none;
   }
-  .btn-nav:hover {
-    background: var(--bg-subtle);
-    border-color: var(--border-strong);
-    color: var(--text);
-  }
-  .btn-nav:active {
-    background: var(--bg-hover);
-  }
+  .btn-nav:hover  { background: var(--bg-subtle); border-color: var(--border-strong); color: var(--text); }
+  .btn-nav:active { background: var(--bg-hover); }
 
-  /* ── Toolbar icon-text buttons ──────────────────────────────────────────── */
+  /* ── Toolbar buttons ────────────────────────────────────────────────────── */
   .btn-toolbar {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 10px;
-    border-radius: 6px;
-    border: 0.5px solid var(--border);
-    font-size: 11.5px;
-    font-weight: 500;
-    color: var(--text-2);
-    background: var(--bg-surface);
-    cursor: pointer;
-    transition: background 0.1s, border-color 0.1s, color 0.1s;
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 4px 10px; border-radius: 6px;
+    border: 0.5px solid var(--border); font-size: 11.5px; font-weight: 500;
+    color: var(--text-2); background: var(--bg-surface);
+    cursor: pointer; transition: background .1s, border-color .1s, color .1s;
     white-space: nowrap;
   }
-  .btn-toolbar:hover {
-    background: var(--bg-subtle);
-    border-color: var(--border-strong);
-    color: var(--text);
-  }
+  .btn-toolbar:hover     { background: var(--bg-subtle); border-color: var(--border-strong); color: var(--text); }
+  .btn-toolbar:disabled  { opacity: .4; cursor: not-allowed; }
 
-  /* ── Utility semantic aliases ───────────────────────────────────────────── */
+  /* ── Semantic aliases for quick Tailwind usage ──────────────────────────── */
   .text-muted     { color: var(--text-muted); }
   .bg-surface     { background: var(--bg-surface); }
   .border-divider { border-color: var(--border); }

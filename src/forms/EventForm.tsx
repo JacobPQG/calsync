@@ -1,65 +1,75 @@
 // ─── EventForm ────────────────────────────────────────────────────────────────
-// Modal form for creating a new availability entry. Opens when the user clicks
-// "+ Add availability" in the DayView sidebar.
+// Modal form for creating or editing an availability entry.
 //
-// Fields:
-//   Title · Start/End hours · Repeat pattern · Tags
-//   Notes · Location (name + address + maps URL) · Event URL
+// Create mode: pass `date` only — addEvent is called on submit.
+// Edit mode:   pass `existing` (a CalEvent) — updateEvent is called on submit.
+//              The edit button is only shown in EventDetail for the event owner,
+//              so ownership is enforced in the UI before this form is opened.
 //
-// On submit the new event is dispatched to the Zustand store, which also
-// persists it to localStorage via the storage adapter.
+// Time selects use 30-minute increments (0:00, 0:30 … 23:30, and 24:00 for end).
+// Custom tags can be typed and confirmed with Enter or comma.
+// All text inputs have maxLength guards to prevent oversized payloads.
 
 import { useState } from 'react'
-import type { RecurringRule } from '../types'
-import { useStore } from '../store/useStore'
+import type { CalEvent, RecurringRule } from '../types'
+import { useStore }          from '../store/useStore'
 import { urlValidationError } from '../utils/safeUrl'
 
 interface Props {
-  date:    string   // ISO date string for the initial occurrence
-  onClose: () => void
+  date:      string        // ISO date for the initial occurrence (or existing event's date)
+  existing?: CalEvent      // when set, form is in edit mode
+  onClose:   () => void
 }
 
-// Recurrence frequency options shown in the <select>
 const FREQ_OPTIONS = [
-  { value: 'none',    label: 'One time' },
-  { value: 'daily',   label: 'Every day' },
+  { value: 'none',    label: 'One time'           },
+  { value: 'daily',   label: 'Every day'          },
   { value: 'weekly',  label: 'Weekly (pick days)' },
-  { value: 'monthly', label: 'Monthly' },
-  { value: 'custom',  label: 'Specific dates' },
+  { value: 'monthly', label: 'Monthly'            },
+  { value: 'custom',  label: 'Specific dates'     },
 ] as const
 
-// Short labels for Monday-based day-of-week toggles (index 0 = Monday)
-const DOW_LABELS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']
-
-// Preset tag chips for quick selection
+const DOW_LABELS  = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']
 const COMMON_TAGS = ['work', 'personal', 'travel', 'focus', 'flex', 'free']
 
-// Format an hour integer (0–23) as "HH:00" for <option> labels
-function hourLabel(h: number): string {
-  return `${String(h).padStart(2, '0')}:00`
+// 30-minute increment options: 0, 0.5, 1 … 23.5 (start) and 0.5 … 24 (end)
+const START_HOURS = Array.from({ length: 48 }, (_, i) => i * 0.5)
+const END_HOURS   = Array.from({ length: 48 }, (_, i) => (i + 1) * 0.5)
+
+function fmtHalf(h: number): string {
+  if (h === 24) return 'Midnight'
+  const hour = Math.floor(h)
+  const min  = h % 1 !== 0 ? ':30' : ':00'
+  if (hour === 0)  return `12${min} AM`
+  if (hour === 12) return `12${min} PM`
+  return hour < 12 ? `${hour}${min} AM` : `${hour - 12}${min} PM`
 }
 
-export function EventForm({ date, onClose }: Props) {
-  const { addEvent, activeUser, activeUserId } = useStore()
-  const user = activeUser()
+export function EventForm({ date, existing, onClose }: Props) {
+  const { addEvent, updateEvent, activeUser, activeUserId } = useStore()
+  const user    = activeUser()
+  const isEdit  = !!existing
 
-  const [title,           setTitle]           = useState('')
-  const [description,     setDescription]     = useState('')
-  const [startHour,       setStartHour]       = useState(9)
-  const [endHour,         setEndHour]         = useState(17)
-  const [tags,            setTags]            = useState<string[]>([])
-  const [locationName,    setLocationName]    = useState('')
-  const [locationAddress, setLocationAddress] = useState('')
-  const [locationMapsUrl, setLocationMapsUrl] = useState('')
-  const [eventUrl,        setEventUrl]        = useState('')
-  const [frequency,       setFrequency]       = useState<RecurringRule['frequency']>('none')
-  const [daysOfWeek,      setDaysOfWeek]      = useState<number[]>([])
-  const [endDate,         setEndDate]         = useState('')
+  const [title,           setTitle]           = useState(existing?.title           ?? '')
+  const [description,     setDescription]     = useState(existing?.description     ?? '')
+  const [startHour,       setStartHour]       = useState(existing?.startHour       ?? 9)
+  const [endHour,         setEndHour]         = useState(existing?.endHour         ?? 17)
+  const [tags,            setTags]            = useState<string[]>(existing?.tags  ?? [])
+  const [locationName,    setLocationName]    = useState(existing?.location?.name    ?? '')
+  const [locationAddress, setLocationAddress] = useState(existing?.location?.address ?? '')
+  const [locationMapsUrl, setLocationMapsUrl] = useState(existing?.location?.mapsUrl ?? '')
+  const [eventUrl,        setEventUrl]        = useState(existing?.eventUrl         ?? '')
+  const [frequency,       setFrequency]       = useState<RecurringRule['frequency']>(
+    existing?.recurring?.frequency ?? 'none'
+  )
+  const [daysOfWeek, setDaysOfWeek] = useState<number[]>(existing?.recurring?.daysOfWeek ?? [])
+  const [endDate,    setEndDate]    = useState(existing?.recurring?.endDate ?? '')
+  const [customTag,  setCustomTag]  = useState('')
 
-  // Guard: require an active user before showing the form body
   if (!user || !activeUserId) {
     return (
-      <div className="fixed inset-0 flex items-center justify-center z-50" style={{ background: 'rgba(0,0,0,0.45)' }}>
+      <div className="fixed inset-0 flex items-center justify-center z-50"
+        style={{ background: 'rgba(0,0,0,0.45)' }}>
         <div className="rounded-xl p-6 text-sm shadow-xl" style={{ background: 'var(--bg-surface)' }}>
           Please select a user first.
           <button onClick={onClose} className="ml-4 underline" style={{ color: 'var(--accent)' }}>Close</button>
@@ -68,29 +78,50 @@ export function EventForm({ date, onClose }: Props) {
     )
   }
 
+  // ── Tag helpers ──────────────────────────────────────────────────────────────
+
   function toggleTag(tag: string) {
     setTags(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag])
+  }
+
+  function commitCustomTag() {
+    // Strip to safe alphanumeric/dash chars; max 30 chars; max 10 tags total
+    const cleaned = customTag.trim().toLowerCase().replace(/[^a-z0-9\-]/g, '').slice(0, 30)
+    if (cleaned && !tags.includes(cleaned) && tags.length < 10) {
+      setTags(prev => [...prev, cleaned])
+    }
+    setCustomTag('')
+  }
+
+  function handleCustomTagKey(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); commitCustomTag() }
   }
 
   function toggleDow(i: number) {
     setDaysOfWeek(prev => prev.includes(i) ? prev.filter(d => d !== i) : [...prev, i])
   }
 
+  // ── Submit ───────────────────────────────────────────────────────────────────
+
   function submit() {
     if (!title.trim()) return
-    // Block submission if either URL field contains a dangerous scheme.
-    if (eventUrl && urlValidationError(eventUrl)) return
+    if (eventUrl        && urlValidationError(eventUrl))        return
     if (locationMapsUrl && urlValidationError(locationMapsUrl)) return
-    addEvent({
-      userId:    activeUserId,
-      title:     title.trim(),
-      description,
+
+    const payload = {
+      userId:      activeUserId,
+      title:       title.trim().slice(0, 100),
+      description: description.slice(0, 1000),
       tags,
-      date,
+      date:        existing?.date ?? date,
       startHour,
-      endHour,
-      location: locationName || locationAddress || locationMapsUrl
-        ? { name: locationName || undefined, address: locationAddress || undefined, mapsUrl: locationMapsUrl || undefined }
+      endHour:     endHour > startHour ? endHour : startHour + 0.5,
+      location:    locationName || locationAddress || locationMapsUrl
+        ? {
+            name:    locationName    || undefined,
+            address: locationAddress || undefined,
+            mapsUrl: locationMapsUrl || undefined,
+          }
         : undefined,
       eventUrl: eventUrl || undefined,
       recurring: {
@@ -98,25 +129,33 @@ export function EventForm({ date, onClose }: Props) {
         daysOfWeek: frequency === 'weekly' ? daysOfWeek : undefined,
         endDate:    endDate || undefined,
       },
-    })
+    }
+
+    if (isEdit && existing) {
+      updateEvent(existing.id, payload)
+    } else {
+      addEvent(payload)
+    }
     onClose()
   }
 
-  // ── Shared chip style helpers ─────────────────────────────────────────────
+  // ── Chip style ───────────────────────────────────────────────────────────────
 
-  function chipStyle(active: boolean) {
+  function chipStyle(active: boolean): React.CSSProperties {
     return {
-      padding: '4px 12px',
+      padding:     '4px 12px',
       borderRadius: 999,
-      fontSize: 12,
-      fontWeight: 500,
-      border: `0.5px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-      background: active ? 'var(--accent-bg)' : 'transparent',
-      color: active ? 'var(--accent)' : 'var(--text-muted)',
-      cursor: 'pointer',
-      transition: 'all 0.1s',
-    } as React.CSSProperties
+      fontSize:    12,
+      fontWeight:  500,
+      border:      `0.5px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+      background:  active ? 'var(--accent-bg)' : 'transparent',
+      color:       active ? 'var(--accent)' : 'var(--text-muted)',
+      cursor:      'pointer',
+      transition:  'all 0.1s',
+    }
   }
+
+  const customTags = tags.filter(t => !COMMON_TAGS.includes(t))
 
   return (
     <div
@@ -128,26 +167,23 @@ export function EventForm({ date, onClose }: Props) {
         className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-xl shadow-xl flex flex-col"
         style={{ background: 'var(--bg-surface)' }}
       >
+
         {/* Header */}
-        <div
-          className="flex items-center px-5 py-4 shrink-0"
-          style={{ borderBottom: '0.5px solid var(--border)' }}
-        >
+        <div className="flex items-center px-5 py-4 shrink-0"
+          style={{ borderBottom: '0.5px solid var(--border)' }}>
           <div className="flex-1 min-w-0">
             <h3 className="font-semibold text-sm" style={{ color: 'var(--text)' }}>
-              Add availability
+              {isEdit ? 'Edit availability' : 'Add availability'}
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              {date} · {user.name}
+              {existing?.date ?? date} · {user.name}
             </p>
           </div>
           <button
             onClick={onClose}
             className="text-xl leading-none ml-2 rounded p-1 transition-colors"
             style={{ color: 'var(--text-muted)' }}
-          >
-            ×
-          </button>
+          >×</button>
         </div>
 
         {/* Body */}
@@ -162,25 +198,34 @@ export function EventForm({ date, onClose }: Props) {
               value={title}
               onChange={e => setTitle(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && submit()}
+              maxLength={100}
               autoFocus
             />
           </div>
 
-          {/* Hours */}
+          {/* Hours — 30-minute increments */}
           <div className="flex gap-3">
             <div className="flex-1">
               <label className="field-label">From</label>
-              <select className="field-input" value={startHour} onChange={e => setStartHour(+e.target.value)}>
-                {Array.from({ length: 24 }, (_, i) => i).map(h => (
-                  <option key={h} value={h}>{hourLabel(h)}</option>
+              <select
+                className="field-input"
+                value={startHour}
+                onChange={e => setStartHour(parseFloat(e.target.value))}
+              >
+                {START_HOURS.map(h => (
+                  <option key={h} value={h}>{fmtHalf(h)}</option>
                 ))}
               </select>
             </div>
             <div className="flex-1">
               <label className="field-label">To</label>
-              <select className="field-input" value={endHour} onChange={e => setEndHour(+e.target.value)}>
-                {Array.from({ length: 24 }, (_, i) => i + 1).map(h => (
-                  <option key={h} value={h}>{hourLabel(h)}</option>
+              <select
+                className="field-input"
+                value={endHour}
+                onChange={e => setEndHour(parseFloat(e.target.value))}
+              >
+                {END_HOURS.filter(h => h > startHour).map(h => (
+                  <option key={h} value={h}>{fmtHalf(h)}</option>
                 ))}
               </select>
             </div>
@@ -200,7 +245,6 @@ export function EventForm({ date, onClose }: Props) {
             </select>
           </div>
 
-          {/* Day-of-week toggles for weekly recurrence */}
           {frequency === 'weekly' && (
             <div>
               <label className="field-label">Days</label>
@@ -214,32 +258,57 @@ export function EventForm({ date, onClose }: Props) {
             </div>
           )}
 
-          {/* End date for recurring events */}
           {frequency !== 'none' && (
             <div>
               <label className="field-label">End date (optional)</label>
-              <input
-                type="date"
-                className="field-input"
-                value={endDate}
-                onChange={e => setEndDate(e.target.value)}
-              />
+              <input type="date" className="field-input" value={endDate}
+                onChange={e => setEndDate(e.target.value)} />
             </div>
           )}
 
-          {/* Tags */}
+          {/* Tags — preset chips + custom */}
           <div>
             <label className="field-label">Tags</label>
-            <div className="flex gap-1.5 flex-wrap">
+            <div className="flex gap-1.5 flex-wrap mb-2">
               {COMMON_TAGS.map(t => (
                 <button key={t} type="button" onClick={() => toggleTag(t)} style={chipStyle(tags.includes(t))}>
                   {t}
                 </button>
               ))}
             </div>
+
+            {/* Active custom tags */}
+            {customTags.length > 0 && (
+              <div className="flex gap-1.5 flex-wrap mb-2">
+                {customTags.map(t => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setTags(prev => prev.filter(x => x !== t))}
+                    style={{ ...chipStyle(true), paddingRight: 8 }}
+                  >
+                    {t} ×
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Custom tag input */}
+            {tags.length < 10 && (
+              <input
+                className="field-input"
+                style={{ fontSize: 12, padding: '5px 10px' }}
+                placeholder="Custom tag — Enter or comma to add"
+                value={customTag}
+                onChange={e => setCustomTag(e.target.value)}
+                onKeyDown={handleCustomTagKey}
+                onBlur={commitCustomTag}
+                maxLength={30}
+              />
+            )}
           </div>
 
-          {/* Notes / description */}
+          {/* Notes */}
           <div>
             <label className="field-label">Notes</label>
             <textarea
@@ -248,6 +317,7 @@ export function EventForm({ date, onClose }: Props) {
               placeholder="Any details, context, preferences…"
               value={description}
               onChange={e => setDescription(e.target.value)}
+              maxLength={1000}
             />
           </div>
 
@@ -259,22 +329,25 @@ export function EventForm({ date, onClose }: Props) {
               placeholder="Place name (e.g. Coffee Lab, Home)"
               value={locationName}
               onChange={e => setLocationName(e.target.value)}
+              maxLength={200}
             />
             <input
               className="field-input mb-2"
               placeholder="Address (used to generate a maps link)"
               value={locationAddress}
               onChange={e => setLocationAddress(e.target.value)}
+              maxLength={200}
             />
             <input
               className="field-input"
               placeholder="Custom map URL (optional)"
               value={locationMapsUrl}
               onChange={e => setLocationMapsUrl(e.target.value)}
+              maxLength={2048}
             />
           </div>
 
-          {/* External event URL — validated to block javascript: and data: URIs */}
+          {/* Event URL */}
           <div>
             <label className="field-label">Event link</label>
             <input
@@ -282,6 +355,7 @@ export function EventForm({ date, onClose }: Props) {
               placeholder="https://…"
               value={eventUrl}
               onChange={e => setEventUrl(e.target.value)}
+              maxLength={2048}
             />
             {eventUrl && urlValidationError(eventUrl) && (
               <p className="text-xs mt-1" style={{ color: '#dc2626' }}>
@@ -292,10 +366,8 @@ export function EventForm({ date, onClose }: Props) {
         </div>
 
         {/* Footer */}
-        <div
-          className="flex justify-end gap-2 px-5 py-4 shrink-0"
-          style={{ borderTop: '0.5px solid var(--border)' }}
-        >
+        <div className="flex justify-end gap-2 px-5 py-4 shrink-0"
+          style={{ borderTop: '0.5px solid var(--border)' }}>
           <button
             onClick={onClose}
             className="px-4 py-1.5 text-sm rounded-lg border font-medium transition-colors"
@@ -309,7 +381,7 @@ export function EventForm({ date, onClose }: Props) {
             className="px-5 py-1.5 text-sm rounded-lg text-white font-medium disabled:opacity-40 transition-opacity"
             style={{ background: 'var(--accent)' }}
           >
-            Save
+            {isEdit ? 'Save changes' : 'Save'}
           </button>
         </div>
       </div>

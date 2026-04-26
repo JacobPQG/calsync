@@ -47,21 +47,30 @@ function isValidSharedState(raw: unknown): raw is ShareableState {
   if (!raw || typeof raw !== 'object') return false
   const s = raw as Record<string, unknown>
   if (!Array.isArray(s.users) || !Array.isArray(s.events)) return false
+  // Hard caps prevent a crafted link from flooding the store.
+  if (s.users.length  > 50)  return false
+  if (s.events.length > 500) return false
 
   return (
-    s.users.every(u =>
-      u && typeof u === 'object' &&
-      typeof (u as Record<string, unknown>).id    === 'string' &&
-      typeof (u as Record<string, unknown>).name  === 'string' &&
-      typeof (u as Record<string, unknown>).color === 'string'
-    ) &&
-    s.events.every(e =>
-      e && typeof e === 'object' &&
-      typeof (e as Record<string, unknown>).id     === 'string' &&
-      typeof (e as Record<string, unknown>).userId === 'string' &&
-      typeof (e as Record<string, unknown>).title  === 'string' &&
-      typeof (e as Record<string, unknown>).date   === 'string'
-    )
+    s.users.every(u => {
+      if (!u || typeof u !== 'object') return false
+      const r = u as Record<string, unknown>
+      return (
+        typeof r.id    === 'string' && r.id.length    <= 128 &&
+        typeof r.name  === 'string' && r.name.length  <= 100 &&
+        typeof r.color === 'string' && r.color.length <=  20
+      )
+    }) &&
+    s.events.every(e => {
+      if (!e || typeof e !== 'object') return false
+      const r = e as Record<string, unknown>
+      return (
+        typeof r.id     === 'string' && r.id.length     <= 128 &&
+        typeof r.userId === 'string' && r.userId.length <= 128 &&
+        typeof r.title  === 'string' && r.title.length  <= 200 &&
+        typeof r.date   === 'string' && r.date.length   <=  20
+      )
+    })
   )
 }
 
@@ -71,7 +80,10 @@ export function decodeStateFromUrl(): ShareableState | null {
     const hash  = window.location.hash
     const match = hash.match(/^#share=(.+)$/)
     if (!match) return null
-    const parsed = JSON.parse(base64UrlToUtf8(match[1]))
+    const decoded = base64UrlToUtf8(match[1])
+    // Reject payloads over 50 KB — prevents DoS via enormous share links.
+    if (decoded.length > 50_000) return null
+    const parsed = JSON.parse(decoded)
     // Reject anything that doesn't conform to the expected shape.
     if (!isValidSharedState(parsed)) return null
     return parsed

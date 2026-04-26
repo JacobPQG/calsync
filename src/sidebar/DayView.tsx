@@ -1,57 +1,97 @@
 // ─── DayView sidebar ─────────────────────────────────────────────────────────
-// Renders the right-side panel. Has three visual states:
-//
+// Three visual states:
 //   1. No date selected  →  placeholder prompt
-//   2. Date selected, no event clicked  →  hour timeline with events
-//   3. Event clicked  →  event detail view (inline, back button to return)
+//   2. Date selected     →  hour timeline with non-overlapping event columns
+//   3. Event clicked     →  event detail (inline; back button to return)
 //
-// Hour timeline: events are absolutely positioned by their start/end hours,
-// giving a proportional "Google Calendar day view" feel. A live red line marks
-// the current time when the selected day is today.
+// Overlapping events are laid out in side-by-side columns using a greedy
+// column-assignment algorithm: sort by start, assign each event the lowest
+// column not taken by any earlier overlapping event.
 
 import { useMemo, useState, useEffect } from 'react'
 import {
   format, parseISO, formatDistanceToNow, isFuture, isToday as dateFnsIsToday,
 } from 'date-fns'
-import type { EventInstance } from '../types'
+import type { CalEvent, EventInstance } from '../types'
 import { useStore }          from '../store/useStore'
 import { buildDaySummaries } from '../engine/recurrence'
 import { EventForm }         from '../forms/EventForm'
 import { safeUrl }           from '../utils/safeUrl'
 
-// Timeline configuration
-const FIRST_HOUR  = 6    // 6 AM  — earliest visible row
-const LAST_HOUR   = 23   // 11 PM — last row start (ends at midnight)
-const HOUR_PX     = 56   // pixels per one-hour row
+const FIRST_HOUR = 6
+const LAST_HOUR  = 23
+const HOUR_PX    = 56
+const LABEL_W    = 54
 
-// ── Small utility ─────────────────────────────────────────────────────────────
-
-// Format an integer hour (0–24) as a human-readable string: "6 AM", "12 PM", etc.
+// Format hour (supports half-hours): 9 → "9 AM", 9.5 → "9:30 AM"
 function fmtHour(h: number): string {
-  if (h === 0 || h === 24) return '12 AM'
-  if (h === 12)             return '12 PM'
-  return h < 12 ? `${h} AM` : `${h - 12} PM`
+  const hour = Math.floor(h)
+  const min  = h % 1 !== 0 ? ':30' : ''
+  if (hour === 0 || hour === 24) return `12${min} AM`
+  if (hour === 12)               return `12${min} PM`
+  return hour < 12 ? `${hour}${min} AM` : `${hour - 12}${min} PM`
 }
 
-// ─── DayView (root) ───────────────────────────────────────────────────────────
+// Like fmtHour but always includes :00/:30 for detail displays
+function fmtTime(h: number): string {
+  const hour = Math.floor(h)
+  const min  = h % 1 !== 0 ? ':30' : ':00'
+  if (hour === 0 || hour === 24) return `12${min} AM`
+  if (hour === 12)               return `12${min} PM`
+  return hour < 12 ? `${hour}${min} AM` : `${hour - 12}${min} PM`
+}
+
+// ── Column layout ─────────────────────────────────────────────────────────────
+
+interface LayoutItem { inst: EventInstance; col: number; numCols: number }
+
+function eventsOverlap(a: CalEvent, b: CalEvent): boolean {
+  return a.startHour < b.endHour && b.startHour < a.endHour
+}
+
+function layoutInstances(instances: EventInstance[]): LayoutItem[] {
+  if (instances.length === 0) return []
+  const sorted = [...instances].sort((a, b) => a.event.startHour - b.event.startHour)
+  const n    = sorted.length
+  const cols = new Array<number>(n).fill(0)
+
+  for (let i = 0; i < n; i++) {
+    const used = new Set<number>()
+    for (let j = 0; j < i; j++) {
+      if (eventsOverlap(sorted[j].event, sorted[i].event)) used.add(cols[j])
+    }
+    let c = 0
+    while (used.has(c)) c++
+    cols[i] = c
+  }
+
+  return sorted.map((inst, i) => {
+    let maxCol = cols[i]
+    for (let j = 0; j < n; j++) {
+      if (j !== i && eventsOverlap(inst.event, sorted[j].event)) {
+        maxCol = Math.max(maxCol, cols[j])
+      }
+    }
+    return { inst, col: cols[i], numCols: maxCol + 1 }
+  })
+}
+
+// ─── DayView ─────────────────────────────────────────────────────────────────
 
 export function DayView() {
   const { selectedDate, events, users, deleteEvent } = useStore()
 
-  const [showForm,    setShowForm]    = useState(false)
-  const [activeEvent, setActiveEvent] = useState<EventInstance | null>(null)
-
-  // Current-time indicator Y offset (null when time is outside visible range).
+  const [showForm,     setShowForm]     = useState(false)
+  const [activeEvent,  setActiveEvent]  = useState<EventInstance | null>(null)
+  const [editingEvent, setEditingEvent] = useState<CalEvent | null>(null)
   const [currentTimeY, setCurrentTimeY] = useState<number | null>(null)
 
-  // Rebuild summary when the selected date or event/user data changes.
   const summary = useMemo(() => {
     if (!selectedDate) return null
     const d = parseISO(selectedDate)
     return buildDaySummaries(events, users, d, d).get(selectedDate) ?? null
   }, [selectedDate, events, users])
 
-  // Update the red "now" line every minute.
   useEffect(() => {
     function tick() {
       const now  = new Date()
@@ -65,10 +105,7 @@ export function DayView() {
     return () => clearInterval(id)
   }, [])
 
-  // Reset event detail whenever the user switches to a different day.
-  useEffect(() => { setActiveEvent(null) }, [selectedDate])
-
-  // ── Empty state ─────────────────────────────────────────────────────────
+  useEffect(() => { setActiveEvent(null); setEditingEvent(null) }, [selectedDate])
 
   if (!selectedDate) {
     return (
@@ -76,7 +113,8 @@ export function DayView() {
         className="flex flex-col items-center justify-center h-full gap-3 px-8 text-center"
         style={{ color: 'var(--text-muted)' }}
       >
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" opacity="0.45">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" opacity="0.45">
           <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
           <line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>
           <line x1="3" y1="10" x2="21" y2="10"/>
@@ -98,11 +136,8 @@ export function DayView() {
   return (
     <div className="flex flex-col h-full">
 
-      {/* ── Day header ─────────────────────────────────────────────────── */}
-      <div
-        className="px-4 py-3 shrink-0"
-        style={{ borderBottom: '0.5px solid var(--border)' }}
-      >
+      {/* ── Header ─────────────────────────────────────────────────────── */}
+      <div className="px-4 py-3 shrink-0" style={{ borderBottom: '0.5px solid var(--border)' }}>
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <div className="font-semibold text-sm truncate" style={{ color: 'var(--text)' }}>
@@ -118,12 +153,10 @@ export function DayView() {
               </div>
             )}
           </div>
-
-          {/* Back button shown only in event-detail mode */}
           {activeEvent && (
             <button
               onClick={() => setActiveEvent(null)}
-              className="text-xs shrink-0 rounded px-2 py-1 font-medium transition-colors"
+              className="text-xs shrink-0 rounded px-2 py-1 font-medium"
               style={{ color: 'var(--text-muted)', background: 'var(--bg-subtle)' }}
             >
               ← Back
@@ -132,39 +165,33 @@ export function DayView() {
         </div>
       </div>
 
-      {/* ── Scrollable content area ─────────────────────────────────────── */}
+      {/* ── Content ────────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto">
         {activeEvent
           ? (
-              <EventDetail
-                instance={activeEvent}
-                onClose={() => setActiveEvent(null)}
-                onDelete={() => {
-                  deleteEvent(activeEvent.event.id)
-                  setActiveEvent(null)
-                }}
-              />
-            )
+            <EventDetail
+              instance={activeEvent}
+              onClose={() => setActiveEvent(null)}
+              onDelete={() => { deleteEvent(activeEvent.event.id); setActiveEvent(null) }}
+              onEdit={() => setEditingEvent(activeEvent.event)}
+            />
+          )
           : (
-              <HourTimeline
-                instances={instances}
-                currentTimeY={isToday ? currentTimeY : null}
-                onClickEvent={setActiveEvent}
-              />
-            )
+            <HourTimeline
+              instances={instances}
+              currentTimeY={isToday ? currentTimeY : null}
+              onClickEvent={setActiveEvent}
+            />
+          )
         }
       </div>
 
-      {/* ── Footer: add event ───────────────────────────────────────────── */}
+      {/* ── Footer ─────────────────────────────────────────────────────── */}
       {!activeEvent && (
         <div className="shrink-0 p-3" style={{ borderTop: '0.5px solid var(--border)' }}>
           <button
             className="w-full text-sm py-2 rounded-lg border font-medium transition-colors"
-            style={{
-              borderColor: 'var(--border)',
-              color: 'var(--text-2)',
-              background: 'var(--bg-surface)',
-            }}
+            style={{ borderColor: 'var(--border)', color: 'var(--text-2)', background: 'var(--bg-surface)' }}
             onClick={() => setShowForm(true)}
           >
             + Add availability
@@ -172,14 +199,17 @@ export function DayView() {
         </div>
       )}
 
-      {showForm && <EventForm date={selectedDate} onClose={() => setShowForm(false)} />}
+      {showForm && (
+        <EventForm date={selectedDate} onClose={() => setShowForm(false)} />
+      )}
+      {editingEvent && (
+        <EventForm date={editingEvent.date} existing={editingEvent} onClose={() => setEditingEvent(null)} />
+      )}
     </div>
   )
 }
 
 // ─── HourTimeline ─────────────────────────────────────────────────────────────
-// Time grid spanning FIRST_HOUR…LAST_HOUR. Events are laid out using absolute
-// CSS positioning so they scale proportionally with the hour row height.
 
 interface TimelineProps {
   instances:    EventInstance[]
@@ -192,100 +222,88 @@ function HourTimeline({ instances, currentTimeY, onClickEvent }: TimelineProps) 
   const totalHeight = totalHours * HOUR_PX
   const hourRows    = Array.from({ length: totalHours }, (_, i) => i + FIRST_HOUR)
 
-  // Deduplicate: recurring events can produce multiple instances for the same
-  // date (one per rule match). Keep the first occurrence per event ID.
-  const seen     = new Set<string>()
-  const deduped  = instances.filter(i => {
+  // One instance per event ID (recurring events may produce duplicates for a date)
+  const seen    = new Set<string>()
+  const deduped = instances.filter(i => {
     if (seen.has(i.event.id)) return false
     seen.add(i.event.id)
     return true
   })
 
+  const laid = useMemo(() => layoutInstances(deduped), [deduped])
+
   return (
-    // The outer container has a fixed height; events use position:absolute
-    // with top values derived from (startHour - FIRST_HOUR) * HOUR_PX.
     <div className="relative" style={{ height: totalHeight }}>
 
-      {/* ── Hour grid lines and labels ──────────────────────────────────── */}
+      {/* Hour grid lines + labels */}
       {hourRows.map(hour => (
         <div
           key={hour}
           className="absolute flex w-full pointer-events-none"
           style={{ top: (hour - FIRST_HOUR) * HOUR_PX, height: HOUR_PX }}
         >
-          {/* Time label */}
           <div
             className="shrink-0 text-right pr-3 pt-1 select-none"
-            style={{ width: 54, fontSize: 10, color: 'var(--text-muted)', fontWeight: 500 }}
+            style={{ width: LABEL_W, fontSize: 10, color: 'var(--text-muted)', fontWeight: 500 }}
           >
             {fmtHour(hour)}
           </div>
-          {/* Horizontal rule */}
           <div className="flex-1 border-t" style={{ borderColor: 'var(--border)' }} />
         </div>
       ))}
 
-      {/* ── Event blocks ────────────────────────────────────────────────── */}
-      {/* Events live in a container that starts after the time-label column.  */}
-      {deduped.map(inst => {
-        const { startHour, endHour } = inst.event
-        const color  = inst.event.color ?? inst.user.color
-        const top    = Math.max(0, (startHour - FIRST_HOUR) * HOUR_PX)
-        // Minimum height of half an hour so short events remain clickable.
-        const height = Math.max(HOUR_PX * 0.5, (endHour - startHour) * HOUR_PX - 2)
+      {/* Event blocks — in a container that starts past the label column */}
+      <div className="absolute" style={{ top: 0, left: LABEL_W + 3, right: 4, bottom: 0 }}>
+        {laid.map(({ inst, col, numCols }) => {
+          const { startHour, endHour } = inst.event
+          const color  = inst.event.color ?? inst.user.color
+          const top    = Math.max(0, (startHour - FIRST_HOUR) * HOUR_PX)
+          const height = Math.max(HOUR_PX * 0.5, (endHour - startHour) * HOUR_PX - 2)
+          const pct    = 100 / numCols
 
-        return (
-          <button
-            key={inst.event.id}
-            className="absolute rounded-md text-left transition-all"
-            style={{
-              top,
-              left: 57,         // aligns to the right of time labels
-              right: 6,
-              height,
-              background: color + '1a',
-              borderLeft: `3px solid ${color}`,
-              boxShadow: `inset 0 0 0 0.5px ${color}35`,
-              padding: '4px 8px',
-            }}
-            onClick={() => onClickEvent(inst)}
-          >
-            <div
-              className="text-xs font-semibold truncate leading-tight"
-              style={{ color }}
+          return (
+            <button
+              key={inst.event.id}
+              className="absolute rounded-md text-left overflow-hidden transition-opacity hover:opacity-85"
+              style={{
+                top,
+                height,
+                left:       `calc(${col * pct}% + 1px)`,
+                width:      `calc(${pct}% - 2px)`,
+                background: color + '1a',
+                borderLeft: `3px solid ${color}`,
+                boxShadow:  `inset 0 0 0 0.5px ${color}35`,
+                padding:    '4px 6px',
+              }}
+              onClick={() => onClickEvent(inst)}
             >
-              {inst.user.name}
-            </div>
-            {inst.event.title && (
-              <div className="text-[11px] truncate leading-tight mt-0.5" style={{ color }}>
-                {inst.event.title}
+              <div className="text-xs font-semibold truncate leading-tight" style={{ color }}>
+                {inst.user.name}
               </div>
-            )}
-            {inst.event.location?.name && height > HOUR_PX && (
-              <div className="text-[10px] truncate mt-0.5" style={{ color, opacity: 0.7 }}>
-                📍 {inst.event.location.name}
-              </div>
-            )}
-          </button>
-        )
-      })}
+              {inst.event.title && height > HOUR_PX * 0.6 && (
+                <div className="text-[11px] truncate leading-tight mt-0.5" style={{ color }}>
+                  {inst.event.title}
+                </div>
+              )}
+              {inst.event.location?.name && height > HOUR_PX && (
+                <div className="text-[10px] truncate mt-0.5" style={{ color, opacity: 0.7 }}>
+                  {inst.event.location.name}
+                </div>
+              )}
+            </button>
+          )
+        })}
+      </div>
 
-      {/* ── Current-time indicator ──────────────────────────────────────── */}
-      {/* Red dot + line, visible only when viewing today. */}
+      {/* Current-time red line + dot */}
       {currentTimeY !== null && (
         <div
           className="absolute pointer-events-none"
-          style={{ top: currentTimeY, left: 54, right: 0 }}
+          style={{ top: currentTimeY, left: LABEL_W, right: 0 }}
         >
           <div className="relative">
-            <div
-              className="absolute rounded-full"
-              style={{
-                left: -5, top: -4,
-                width: 9, height: 9,
-                background: '#ef4444',
-              }}
-            />
+            <div className="absolute rounded-full"
+              style={{ left: -5, top: -4, width: 9, height: 9, background: '#ef4444' }} />
             <div style={{ height: 1.5, background: '#ef4444', opacity: 0.75 }} />
           </div>
         </div>
@@ -295,50 +313,39 @@ function HourTimeline({ instances, currentTimeY, onClickEvent }: TimelineProps) 
 }
 
 // ─── EventDetail ─────────────────────────────────────────────────────────────
-// Full-detail view for a single event, shown when the user clicks an event
-// block in the timeline. Displays all fields: time, description, tags,
-// location (+ directions link), external URL, recurrence info, and a
-// time-relative label ("in 3 hours", "yesterday", etc.).
+// Edit and Delete are owner-only (event.userId === activeUserId).
 
 interface EventDetailProps {
   instance: EventInstance
   onClose:  () => void
   onDelete: () => void
+  onEdit:   () => void
 }
 
-function EventDetail({ instance, onDelete }: EventDetailProps) {
+function EventDetail({ instance, onDelete, onEdit }: EventDetailProps) {
+  const { activeUserId } = useStore()
   const { event, user, date } = instance
-  const color = event.color ?? user.color
+  const color   = event.color ?? user.color
+  const isOwner = event.userId === activeUserId
 
-  const startStr = fmtHour(event.startHour)
-  const endStr   = fmtHour(event.endHour)
-
-  // Build a Date for the event start so we can compute relative time.
-  const eventStart   = new Date(`${date}T${String(event.startHour).padStart(2, '0')}:00:00`)
+  const h = Math.floor(event.startHour)
+  const m = event.startHour % 1 !== 0 ? '30' : '00'
+  const eventStart   = new Date(`${date}T${String(h).padStart(2, '0')}:${m}:00`)
   const relativeTime = formatDistanceToNow(eventStart, { addSuffix: true })
   const isUpcoming   = isFuture(eventStart)
 
-  // Resolve the maps URL. The user-supplied mapsUrl is run through safeUrl()
-  // to block javascript: / data: URIs before it reaches any href attribute.
-  // The fallback (constructed from address/name) uses a hardcoded https: prefix
-  // so it is always safe; safeUrl() is still applied for consistency.
-  const mapsQuery     = event.location?.address || event.location?.name
-  const rawMapsUrl    = event.location?.mapsUrl
+  const mapsQuery    = event.location?.address || event.location?.name
+  const rawMapsUrl   = event.location?.mapsUrl
     ?? (mapsQuery ? `https://maps.google.com/?q=${encodeURIComponent(mapsQuery)}` : null)
-  const mapsUrl       = safeUrl(rawMapsUrl)
-  const safeEventUrl  = safeUrl(event.eventUrl)
+  const mapsUrl      = safeUrl(rawMapsUrl)
+  const safeEventUrl = safeUrl(event.eventUrl)
 
   return (
     <div className="p-4 space-y-5">
 
-      {/* ── Color strip + title + user ─────────────────────────────────── */}
-      <div
-        className="rounded-lg p-3"
-        style={{
-          background: color + '12',
-          borderLeft: `3px solid ${color}`,
-        }}
-      >
+      {/* Color strip + title + user */}
+      <div className="rounded-lg p-3"
+        style={{ background: color + '12', borderLeft: `3px solid ${color}` }}>
         <div className="font-semibold text-sm" style={{ color }}>
           {event.title || '(untitled)'}
         </div>
@@ -353,44 +360,36 @@ function EventDetail({ instance, onDelete }: EventDetailProps) {
         </div>
       </div>
 
-      {/* ── Time ──────────────────────────────────────────────────────── */}
+      {/* Time */}
       <div>
         <div className="field-label">Time</div>
         <div className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-          {startStr} – {endStr}
+          {fmtTime(event.startHour)} – {fmtTime(event.endHour)}
         </div>
-        <div
-          className="text-xs mt-0.5"
-          style={{ color: isUpcoming ? 'var(--overlap-text)' : 'var(--text-muted)' }}
-        >
+        <div className="text-xs mt-0.5"
+          style={{ color: isUpcoming ? 'var(--overlap-text)' : 'var(--text-muted)' }}>
           {relativeTime}
         </div>
       </div>
 
-      {/* ── Description / notes ───────────────────────────────────────── */}
+      {/* Notes */}
       {event.description && (
         <div>
           <div className="field-label">Notes</div>
-          <p
-            className="text-sm whitespace-pre-wrap leading-relaxed"
-            style={{ color: 'var(--text-2)' }}
-          >
+          <p className="text-sm whitespace-pre-wrap leading-relaxed" style={{ color: 'var(--text-2)' }}>
             {event.description}
           </p>
         </div>
       )}
 
-      {/* ── Tags ──────────────────────────────────────────────────────── */}
+      {/* Tags */}
       {event.tags.length > 0 && (
         <div>
           <div className="field-label">Tags</div>
           <div className="flex flex-wrap gap-1.5">
             {event.tags.map(tag => (
-              <span
-                key={tag}
-                className="text-xs px-2.5 py-0.5 rounded-full font-medium"
-                style={{ background: color + '20', color }}
-              >
+              <span key={tag} className="text-xs px-2.5 py-0.5 rounded-full font-medium"
+                style={{ background: color + '20', color }}>
                 {tag}
               </span>
             ))}
@@ -398,7 +397,7 @@ function EventDetail({ instance, onDelete }: EventDetailProps) {
         </div>
       )}
 
-      {/* ── Location + Directions ─────────────────────────────────────── */}
+      {/* Location */}
       {(event.location?.name || event.location?.address) && (
         <div>
           <div className="field-label">Location</div>
@@ -413,37 +412,27 @@ function EventDetail({ instance, onDelete }: EventDetailProps) {
             </div>
           )}
           {mapsUrl && (
-            <a
-              href={mapsUrl}
-              target="_blank"
-              rel="noopener noreferrer"
+            <a href={mapsUrl} target="_blank" rel="noopener noreferrer"
               className="inline-flex items-center gap-1 mt-2 text-xs rounded border px-2.5 py-1 font-medium transition-colors"
-              style={{ borderColor: 'var(--border)', color: 'var(--text-2)' }}
-            >
+              style={{ borderColor: 'var(--border)', color: 'var(--text-2)' }}>
               ↗ Get directions
             </a>
           )}
         </div>
       )}
 
-      {/* ── Event URL ─────────────────────────────────────────────────── */}
-      {/* safeEventUrl is undefined for any non-http(s) scheme (javascript:, data:, etc.) */}
+      {/* Event URL */}
       {safeEventUrl && (
         <div>
           <div className="field-label">Event link</div>
-          <a
-            href={safeEventUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs break-all"
-            style={{ color: 'var(--accent)' }}
-          >
+          <a href={safeEventUrl} target="_blank" rel="noopener noreferrer"
+            className="text-xs break-all" style={{ color: 'var(--accent)' }}>
             {safeEventUrl}
           </a>
         </div>
       )}
 
-      {/* ── Recurrence summary ────────────────────────────────────────── */}
+      {/* Recurrence */}
       {event.recurring.frequency !== 'none' && (
         <div>
           <div className="field-label">Repeats</div>
@@ -456,16 +445,25 @@ function EventDetail({ instance, onDelete }: EventDetailProps) {
         </div>
       )}
 
-      {/* ── Danger zone ───────────────────────────────────────────────── */}
-      <div className="pt-1" style={{ borderTop: '0.5px solid var(--border)' }}>
-        <button
-          onClick={onDelete}
-          className="text-xs px-3 py-1.5 rounded border font-medium transition-colors"
-          style={{ borderColor: '#fca5a5', color: '#dc2626', background: '#fff5f5' }}
-        >
-          Delete event
-        </button>
-      </div>
+      {/* Owner-only actions */}
+      {isOwner && (
+        <div className="flex gap-2 pt-1" style={{ borderTop: '0.5px solid var(--border)' }}>
+          <button
+            onClick={onEdit}
+            className="text-xs px-3 py-1.5 rounded border font-medium transition-colors"
+            style={{ borderColor: 'var(--border)', color: 'var(--text-2)', background: 'var(--bg-subtle)' }}
+          >
+            Edit
+          </button>
+          <button
+            onClick={onDelete}
+            className="text-xs px-3 py-1.5 rounded border font-medium transition-colors"
+            style={{ borderColor: '#fca5a5', color: '#dc2626', background: '#fff5f5' }}
+          >
+            Delete
+          </button>
+        </div>
+      )}
     </div>
   )
 }
