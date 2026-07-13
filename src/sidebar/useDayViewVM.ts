@@ -17,7 +17,6 @@ import { useStore }          from '../store/useStore'
 import { buildDaySummaries } from '../engine/recurrence'
 import { safeUrl }           from '../utils/safeUrl'
 import { isPublic, hasCoincidence } from '../engine/visibility'
-import { FEATURES }          from '../lib/siteConfig'
 import { activityById, activityLabel } from '../sports/activities'
 
 // ── Timeline geometry ─────────────────────────────────────────────────────────
@@ -238,7 +237,7 @@ export interface EventDetailVM {
  * the store so a just-recorded result shows without re-selecting the day.
  */
 export function useEventDetailVM(instance: EventInstance): EventDetailVM {
-  const { activeUserId, users, events } = useStore()
+  const { activeUserId, users, events, features } = useStore()
   const liveEvent = useStore(s => s.events.find(e => e.id === instance.event.id))
 
   const { user, date } = instance
@@ -309,7 +308,9 @@ export function useEventDetailVM(instance: EventInstance): EventDetailVM {
     userName:    user.name,
     isOwner,
     activityLabel: activityLabel(event.activity),
-    canScore:  FEATURES.scores && isOwner,
+    // Scores are an opt-in of THIS calendar, not of the build. Owner-only either
+    // way: recording a result is an edit of the event.
+    canScore:  features.scores && isOwner,
     hasResult: !!event.result,
     teamRows,
     isDraw,

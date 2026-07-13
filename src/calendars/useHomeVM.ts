@@ -10,7 +10,8 @@
 // already decided the user may see.
 
 import { useState, useEffect, useCallback } from 'react'
-import type { Calendar } from '../types'
+import type { Calendar, CalendarFeatures } from '../types'
+import { NO_FEATURES } from '../types'
 import {
   listCalendars, createCalendar, leaveCalendar,
 } from './calendarService'
@@ -41,6 +42,11 @@ export interface HomeVM {
   // How many people this calendar is for. The number the owner "defines up front"
   // — a hard cap, enforced at approval, server-side.
   newSeats:    number | null; setNewSeats: (v: number | null) => void
+  // Is this a sports calendar? One switch at creation time, because what you are
+  // choosing here is a KIND of calendar. It turns all three features on; the
+  // owner can tune them individually afterwards in Manage, which is where the
+  // granular control belongs.
+  newSports:   boolean; setNewSports: (v: boolean) => void
   canCreate:   boolean
   submitting:  boolean
   // Resolves to the new calendar's id, so the caller can navigate straight into
@@ -66,6 +72,7 @@ export function useHomeVM(): HomeVM {
   const [creating,   setCreating]   = useState(false)
   const [newName,    setNewName]    = useState('')
   const [newSeats,   setNewSeats]   = useState<number | null>(DEFAULT_CALENDAR_SEATS)
+  const [newSports,  setNewSports]  = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [busyId,     setBusyId]     = useState<string | null>(null)
 
@@ -99,13 +106,17 @@ export function useHomeVM(): HomeVM {
 
     setSubmitting(true)
     try {
-      const { id, error: errMsg } = await createCalendar(clean, newSeats)
+      const features: CalendarFeatures = newSports
+        ? { scores: true, leaderboard: true, challenges: true }
+        : NO_FEATURES
+      const { id, error: errMsg } = await createCalendar(clean, newSeats, features)
       if (errMsg || !id) {
         setError(errMsg ?? 'Could not create the calendar.')
         return null
       }
       setNewName('')
       setNewSeats(DEFAULT_CALENDAR_SEATS)
+      setNewSports(false)
       setCreating(false)
       await refresh()
       return id
@@ -136,6 +147,7 @@ export function useHomeVM(): HomeVM {
     creating, setCreating,
     newName, setNewName,
     newSeats, setNewSeats,
+    newSports, setNewSports,
     canCreate: createBlockedReason === null && newName.trim().length >= MIN_NAME,
     submitting,
     create,

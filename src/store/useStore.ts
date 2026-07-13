@@ -11,7 +11,8 @@
 //   up Supabase Realtime subscriptions so changes by other users appear live.
 
 import { create } from 'zustand'
-import type { User, CalEvent } from '../types'
+import type { User, CalEvent, CalendarFeatures } from '../types'
+import { NO_FEATURES }          from '../types'
 import * as storage             from './storage'
 import { nanoid }               from 'nanoid'
 import { decodeStateFromUrl }   from '../sharing/urlState'
@@ -41,6 +42,16 @@ interface StoreState {
   // Open a calendar (or null to go home). Loads that calendar's events and
   // re-points the realtime subscription at it.
   openCalendar: (calendarId: string | null) => Promise<void>
+
+  // The OPEN calendar's optional features (scores / leaderboard / challenges).
+  // This is what replaced the build-time site variant: "is this a sports
+  // calendar" is now a property of the calendar you are looking at, not of the
+  // build. Every consumer reads it from here so they cannot disagree.
+  //
+  // All-off on the home view — with no calendar open there is no feature set to
+  // speak of, and that is also the safe default (features fail off).
+  features: CalendarFeatures
+  setFeatures: (f: CalendarFeatures) => void
 
   // Per-date counts of anonymous events RLS is withholding from us (Supabase
   // mode only — see storage.loadHiddenCounts). The events themselves never
@@ -108,10 +119,13 @@ export const useStore = create<StoreState>((set, get) => ({
   events:           [],
   activeUserId:     storage.loadActiveUserId(),
   activeCalendarId: null,
+  features:         NO_FEATURES,
   hiddenCounts:     new Map(),
   selectedDate:     null,
   currentMonth:     new Date(),
   isLoading:        true,
+
+  setFeatures: (f) => set({ features: f }),
 
   refreshHiddenCounts: async (fromDate, toDate) => {
     const calendarId = get().activeCalendarId
@@ -194,11 +208,31 @@ export const useStore = create<StoreState>((set, get) => ({
     }
 
     if (!calendarId) {
-      set({ activeCalendarId: null, events: [], hiddenCounts: new Map(), selectedDate: null })
+      set({
+        activeCalendarId: null, events: [], hiddenCounts: new Map(),
+        selectedDate: null,
+        // Clear the feature set on the way out. Left standing, a sports calendar's
+        // flags would still be in the store when the NEXT calendar opens, and for
+        // one render that plain calendar would draw an activity picker and a
+        // leaderboard button.
+        features: NO_FEATURES,
+      })
       return
     }
 
-    set({ isLoading: true, activeCalendarId: calendarId, selectedDate: null })
+    // Same reasoning for the switch between two calendars: blank the features
+    // before the new calendar's arrive, so the outgoing calendar's flags are never
+    // shown against the incoming one's events.
+    //
+    // The features themselves are PUSHED IN by the caller (setFeatures), not
+    // fetched here. They live on the calendar row, which only listCalendars()
+    // returns — and the store importing calendarService would close an import
+    // cycle, since calendarService already imports the store. The caller
+    // (useAppVM) is holding that list anyway.
+    set({
+      isLoading: true, activeCalendarId: calendarId, selectedDate: null,
+      features: NO_FEATURES,
+    })
 
     const backendEvents = await storage.loadEvents(calendarId).catch(() => [] as CalEvent[])
 

@@ -23,7 +23,8 @@
 // and are exercised in live mode. Nothing in this file is evidence that they work.
 
 import { nanoid } from 'nanoid'
-import type { Calendar, CalendarMember, User, CalEvent } from '../types'
+import type { Calendar, CalendarFeatures, CalendarMember, User, CalEvent } from '../types'
+import { NO_FEATURES } from '../types'
 import { IS_SANDBOX } from './devMode'
 
 const KEY = {
@@ -41,7 +42,16 @@ interface StoredCalendar {
   name:       string
   ownerId:    string
   maxMembers: number | null
+  // Undefined on calendars seeded before per-calendar features existed; read it
+  // through feats() below, which defaults them to all-off (the plain calendar).
+  features?:  CalendarFeatures
   createdAt:  string
+}
+
+// Mirrors normalize_features() in db/schema/20_helpers.sql: unknown/absent =
+// off. Features fail OFF here too, so the sandbox and the server agree.
+function feats(f: CalendarFeatures | undefined): CalendarFeatures {
+  return f ?? NO_FEATURES
 }
 
 interface StoredMember {
@@ -104,9 +114,15 @@ export function seedSandbox(): SeedResult {
 
   const calendars: StoredCalendar[] = [
     // One you OWN — exercises Manage, invites, the approval queue, the seat cap.
-    { id: teamId,  name: 'Team planning', ownerId: SANDBOX_ME,    maxMembers: 8,    createdAt: now },
-    // One you were INVITED into — exercises "Shared with me" and Leave.
-    { id: fiveAId, name: 'Five-a-side',   ownerId: 'sandbox-ana', maxMembers: null, createdAt: now },
+    // Plain: every feature off, which is the classic availability calendar.
+    { id: teamId,  name: 'Team planning', ownerId: SANDBOX_ME,    maxMembers: 8,
+      features: NO_FEATURES, createdAt: now },
+    // One you were INVITED into — exercises "Shared with me" and Leave. Seeded as
+    // a SPORTS calendar so both shapes are on screen at once: this is what the
+    // build-time variant used to be, and now it is just a calendar with its
+    // features turned on.
+    { id: fiveAId, name: 'Five-a-side',   ownerId: 'sandbox-ana', maxMembers: null,
+      features: { scores: true, leaderboard: true, challenges: true }, createdAt: now },
   ]
 
   const members: StoredMember[] = [
@@ -210,6 +226,7 @@ export function sbListCalendars(userName: (id: string) => string | null): Calend
           : 0,
         myStatus:     mine.status,
         isOwner,
+        features:     feats(c.features),
         createdAt:    c.createdAt,
       }
     })
@@ -236,6 +253,7 @@ export function sbListMembers(
 
 export function sbCreateCalendar(
   name: string, maxMembers: number | null,
+  features: CalendarFeatures = NO_FEATURES,
 ): { id: string | null; error: string | null } {
   const clean = name.trim()
   if (!clean)             return { id: null, error: 'a calendar name is required' }
@@ -247,7 +265,7 @@ export function sbCreateCalendar(
   const now = new Date().toISOString()
   write(KEY.calendars, [
     ...readCalendars(),
-    { id, name: clean, ownerId: SANDBOX_ME, maxMembers, createdAt: now },
+    { id, name: clean, ownerId: SANDBOX_ME, maxMembers, features, createdAt: now },
   ])
   // The owner is an approved member of their own calendar from the start — the
   // same invariant create_calendar establishes in one transaction.
@@ -258,8 +276,11 @@ export function sbCreateCalendar(
   return { id, error: null }
 }
 
+// `features` undefined means "leave them alone", matching update_calendar's NULL
+// `feats`. An explicit all-false object is a different instruction: turn them off.
 export function sbUpdateCalendar(
   calendarId: string, name: string, maxMembers: number | null,
+  features?: CalendarFeatures,
 ): string | null {
   const cal = calendarOf(calendarId)
   if (!cal)                     return 'only the calendar owner may change its settings'
@@ -278,7 +299,9 @@ export function sbUpdateCalendar(
   }
 
   write(KEY.calendars, readCalendars().map(c =>
-    c.id === calendarId ? { ...c, name: clean, maxMembers } : c))
+    c.id === calendarId
+      ? { ...c, name: clean, maxMembers, features: features ?? feats(c.features) }
+      : c))
   return null
 }
 

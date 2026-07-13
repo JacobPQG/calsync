@@ -19,7 +19,8 @@ import { supabase, SUPABASE_ENABLED } from '../lib/supabase'
 import { log } from '../lib/log'
 import { IS_SANDBOX } from '../dev/devMode'
 import { useStore } from '../store/useStore'
-import type { Calendar, CalendarMember, MemberStatus } from '../types'
+import type { Calendar, CalendarFeatures, CalendarMember, MemberStatus } from '../types'
+import { NO_FEATURES } from '../types'
 
 const NO_BACKEND = 'Calendars need a Supabase backend (see .env.example).'
 
@@ -53,6 +54,7 @@ interface CalendarRow {
   pending_count: number
   my_status:     string
   is_owner:      boolean
+  features:      unknown          // jsonb — shape is not guaranteed by the type
   created_at:    string
 }
 
@@ -74,6 +76,22 @@ function toStatus(raw: string): MemberStatus {
   return raw === 'approved' ? 'approved' : 'pending'
 }
 
+// The server normalizes `features` before returning it, so in practice this sees
+// a full {scores, leaderboard, challenges} object. It re-checks anyway: this is a
+// jsonb column, the TypeScript type is a claim rather than a guarantee, and a
+// feature that reads as `true` because the value was the string "false" would be
+// a silently-wrong UI. Only a literal boolean true counts — everything else is
+// off, so a malformed payload can only take a feature away, never grant one.
+function toFeatures(raw: unknown): CalendarFeatures {
+  if (!raw || typeof raw !== 'object') return NO_FEATURES
+  const f = raw as Record<string, unknown>
+  return {
+    scores:      f.scores      === true,
+    leaderboard: f.leaderboard === true,
+    challenges:  f.challenges  === true,
+  }
+}
+
 function toCalendar(r: CalendarRow): Calendar {
   return {
     id:           r.id,
@@ -85,6 +103,7 @@ function toCalendar(r: CalendarRow): Calendar {
     pendingCount: Number(r.pending_count),
     myStatus:     toStatus(r.my_status),
     isOwner:      r.is_owner,
+    features:     toFeatures(r.features),
     createdAt:    r.created_at,
   }
 }
@@ -143,13 +162,16 @@ export async function listMembers(calendarId: string): Promise<CalendarMember[]>
 export async function createCalendar(
   name: string,
   maxMembers: number | null,
+  features: CalendarFeatures = NO_FEATURES,
 ): Promise<{ id: string | null; error: string | null }> {
-  if (import.meta.env.DEV && IS_SANDBOX) return (await sandbox()).sbCreateCalendar(name, maxMembers)
+  if (import.meta.env.DEV && IS_SANDBOX) {
+    return (await sandbox()).sbCreateCalendar(name, maxMembers, features)
+  }
   if (!SUPABASE_ENABLED) return { id: null, error: NO_BACKEND }
 
   const id = nanoid()
   const { error } = await supabase.rpc('create_calendar', {
-    cal_id: id, cal_name: name, cap: maxMembers,
+    cal_id: id, cal_name: name, cap: maxMembers, feats: features,
   })
   if (error) {
     log.error('calendar', 'create_calendar failed', error.message)
@@ -158,16 +180,23 @@ export async function createCalendar(
   return { id, error: null }
 }
 
+// `features` omitted (undefined) means "leave them alone" — the RPC's `feats`
+// defaults to NULL, which it reads as "don't touch". Passing an explicit object
+// with all-false is a different instruction: it turns everything off.
 export async function updateCalendar(
   calendarId: string,
   name: string,
   maxMembers: number | null,
+  features?: CalendarFeatures,
 ): Promise<string | null> {
-  if (import.meta.env.DEV && IS_SANDBOX) return (await sandbox()).sbUpdateCalendar(calendarId, name, maxMembers)
+  if (import.meta.env.DEV && IS_SANDBOX) {
+    return (await sandbox()).sbUpdateCalendar(calendarId, name, maxMembers, features)
+  }
   if (!SUPABASE_ENABLED) return NO_BACKEND
 
   const { error } = await supabase.rpc('update_calendar', {
     cal_id: calendarId, cal_name: name, cap: maxMembers,
+    feats: features ?? null,
   })
   if (error) {
     log.error('calendar', `update_calendar failed (cal=${calendarId})`, error.message)

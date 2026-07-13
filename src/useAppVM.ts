@@ -8,6 +8,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import type { User, CalEvent, Calendar } from './types'
+import { NO_FEATURES }                 from './types'
 import { useStore }                    from './store/useStore'
 import { listCalendars }               from './calendars/calendarService'
 import { useAuthSession, type AuthSession } from './auth/useAuth'
@@ -16,7 +17,7 @@ import { downloadIcal, parseIcal }     from './ical/icalUtils'
 import { visibleEvents }               from './engine/visibility'
 import { SUPABASE_ENABLED }            from './lib/supabase'
 import { MAX_ICAL_IMPORT }             from './lib/config'
-import { SITE_NAME, FEATURES, TEST_MODE } from './lib/siteConfig'
+import { SITE_NAME, TEST_MODE }        from './lib/siteConfig'
 import { readInviteCode }              from './invite/inviteLink'
 import { isAdmin as fetchIsAdmin }     from './invite/inviteService'
 
@@ -101,6 +102,7 @@ export function useAppVM(): AppVM {
     isLoading, initialize,
     selectedDate, setSelectedDate,
     activeCalendarId, openCalendar,
+    features, setFeatures,
   } = useStore()
 
   const auth = useAuthSession()
@@ -218,12 +220,28 @@ export function useAppVM(): AppVM {
     e.target.value = ''
   }
 
-  // The calendar being viewed, as the server described it (name, seats, whether I
-  // own it). Null on the home view, and null for a beat after opening one while
-  // the list is in flight — which is why the Manage button is derived from it
-  // rather than from anything the client could assert on its own.
+  // The calendar being viewed, as the server described it (name, seats, features,
+  // whether I own it). Null on the home view, and null for a beat after opening
+  // one while the list is in flight — which is why the Manage button is derived
+  // from it rather than from anything the client could assert on its own.
   const activeCalendar =
     myCalendars.find(c => c.id === activeCalendarId) ?? null
+
+  // Publish the open calendar's features into the store, which is where every
+  // consumer (event form, day view, stats panel) reads them from. Pushed from
+  // here rather than fetched inside openCalendar because the store importing
+  // calendarService would close an import cycle — and this VM is already holding
+  // the calendar list the features come from.
+  //
+  // Falls back to all-off whenever there is no calendar or the list has not
+  // landed yet, so a feature is never drawn on the strength of stale state.
+  const activeFeatures = activeCalendar?.features ?? NO_FEATURES
+  useEffect(() => {
+    setFeatures(activeFeatures)
+  }, [
+    activeFeatures.scores, activeFeatures.leaderboard, activeFeatures.challenges,
+    setFeatures,
+  ])
 
   return {
     siteName: SITE_NAME,
@@ -240,7 +258,9 @@ export function useAppVM(): AppVM {
     openAdmin:  (id: string) => setAdminCalendarId(id),
     closeAdmin: () => setAdminCalendarId(null),
 
-    showStatsButton:  FEATURES.leaderboard || FEATURES.challenges,
+    // Drawn only for a calendar whose owner turned one of these on — so the
+    // button follows the calendar you are in, not the build you deployed.
+    showStatsButton:  features.leaderboard || features.challenges,
     showAddPersonBtn: !SUPABASE_ENABLED || TEST_MODE,
     addPersonIsTest:  SUPABASE_ENABLED,
 

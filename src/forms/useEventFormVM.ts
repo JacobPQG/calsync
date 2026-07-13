@@ -9,22 +9,25 @@
 
 import { useState } from 'react'
 import type { CalEvent, RecurringRule, EventVisibility } from '../types'
-import { DEFAULT_VISIBILITY } from '../types'
+import { DEFAULT_VISIBILITY, isSportsCalendar } from '../types'
 import { useStore }           from '../store/useStore'
 import { urlValidationError } from '../utils/safeUrl'
-import { IS_SPORTS }          from '../lib/siteConfig'
 import { activityById }       from '../sports/activities'
 
-// Preset tag chips differ per site variant.
+// Preset tag chips differ by what the calendar is FOR. Chosen per calendar now,
+// not per build — a sports calendar offers sports tags, a plain one offers the
+// general set. Exported for the view, which renders whichever list the VM picked.
 const CLASSIC_TAGS = ['work', 'personal', 'travel', 'focus', 'flex', 'free']
 const SPORT_TAGS   = ['match', 'training', 'tournament', 'casual', 'indoor', 'outdoor']
-export const PRESET_TAGS = IS_SPORTS ? SPORT_TAGS : CLASSIC_TAGS
 
 const MAX_TAGS = 10
 
 export interface EventFormVM {
   ready:   boolean          // false → "select a user first" state
   isEdit:  boolean
+  // True when the open calendar has sports features on. The view uses it to
+  // decide whether to draw the activity picker and how to label the title field.
+  isSports: boolean
   userName: string
   headerDate: string
 
@@ -65,9 +68,15 @@ export interface EventFormVM {
 export function useEventFormVM(
   { date, existing, onClose }: { date: string; existing?: CalEvent; onClose: () => void },
 ): EventFormVM {
-  const { addEvent, updateEvent, activeUser, activeUserId } = useStore()
+  const { addEvent, updateEvent, activeUser, activeUserId, features } = useStore()
   const user   = activeUser()
   const isEdit = !!existing
+
+  // Is the OPEN calendar a sports calendar? Decides three things in this form:
+  // whether the activity picker exists, which tag presets are offered, and
+  // whether the title is optional (an activity can stand in for it).
+  const isSports   = isSportsCalendar(features)
+  const presetTags = isSports ? SPORT_TAGS : CLASSIC_TAGS
 
   const [title,           setTitle]           = useState(existing?.title           ?? '')
   const [activity,        setActivity]        = useState(existing?.activity        ?? '')
@@ -111,19 +120,26 @@ export function useEventFormVM(
     setDaysOfWeek(prev => prev.includes(i) ? prev.filter(d => d !== i) : [...prev, i])
   }
 
-  // Sports mode: activity OR title is enough. Classic: title required.
-  const canSubmit = IS_SPORTS ? (!!activity || !!title.trim()) : !!title.trim()
+  // Sports calendar: activity OR title is enough (the activity names the event).
+  // Plain calendar: a title is the only thing that identifies it, so it's required.
+  const canSubmit = isSports ? (!!activity || !!title.trim()) : !!title.trim()
 
   function submit() {
     if (!canSubmit || !activeUserId) return
     if (eventUrl        && urlValidationError(eventUrl))        return
     if (locationMapsUrl && urlValidationError(locationMapsUrl)) return
 
-    const fallbackTitle = activityById(activity)?.label ?? ''
+    // The activity is meaningful only in a sports calendar. Preserved as-is on a
+    // plain one (where there is no picker to have set it) so that turning features
+    // off and editing an old event does not quietly strip the activity it was
+    // recorded with — the data outlives the flag, which is what makes the flag
+    // safe to toggle.
+    const keptActivity = isSports ? activity : (existing?.activity ?? '')
+    const fallbackTitle = activityById(keptActivity)?.label ?? ''
     const payload = {
       userId:      activeUserId,
       title:       (title.trim() || fallbackTitle).slice(0, 100),
-      activity:    activity || undefined,
+      activity:    keptActivity || undefined,
       description: description.slice(0, 1000),
       tags,
       date:        existing?.date ?? date,
@@ -163,8 +179,9 @@ export function useEventFormVM(
       locationMapsUrl, setLocationMapsUrl, eventUrl, setEventUrl,
       frequency, setFrequency, daysOfWeek, endDate, setEndDate, customTag, setCustomTag,
     },
-    presetTags: PRESET_TAGS,
-    customTags: tags.filter(t => !PRESET_TAGS.includes(t)),
+    isSports,
+    presetTags,
+    customTags: tags.filter(t => !presetTags.includes(t)),
     canAddMoreTags: tags.length < MAX_TAGS,
     canSubmit,
     eventUrlError: eventUrl ? urlValidationError(eventUrl) : null,

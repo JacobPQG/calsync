@@ -10,7 +10,7 @@
 //   • Colours → CSS vars in src/index.css.
 //   • Behavior → useCalendarAdminVM.ts.
 
-import type { CalendarMember } from '../types'
+import type { CalendarFeatures, CalendarMember } from '../types'
 import { QrCode } from '../invite/QrCode'
 import { avatarEmoji } from '../auth/credentials'
 import { useCalendarAdminVM } from './useCalendarAdminVM'
@@ -21,6 +21,28 @@ const STYLE = {
   qrSize:     150,   // px — one QR per invitee in the bulk grid
   qrMinW:     170,   // px — before the QR grid wraps
 } as const
+
+// The per-calendar feature toggles, as the owner sees them. Presentational only —
+// the keys are the contract (types.ts CalendarFeatures), the copy is not.
+//
+// Ordered by dependency, which is also the order an owner adopts them: scores are
+// what a leaderboard ranks, so a leaderboard with scores off has nothing to show.
+const FEATURE_OPTIONS: {
+  key: keyof CalendarFeatures; icon: string; label: string; hint: string
+}[] = [
+  {
+    key: 'scores', icon: '🏆', label: 'Activities & scores',
+    hint: 'Pick a sport on each event and record the result afterwards.',
+  },
+  {
+    key: 'leaderboard', icon: '📊', label: 'Leaderboard',
+    hint: 'Standings from recorded results — wins, draws, losses, points.',
+  },
+  {
+    key: 'challenges', icon: '🎯', label: 'Challenges',
+    hint: 'Monthly goals: most active, most sports played.',
+  },
+]
 
 interface Props {
   calendarId: string
@@ -280,6 +302,39 @@ export function CalendarAdmin({ calendarId, onClose, onDeleted }: Props) {
             <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
               Cannot be set below the {vm.seatsUsed} member{vm.seatsUsed === 1 ? '' : 's'}
               {' '}already in this calendar.
+            </p>
+          </div>
+
+          {/* ── Optional features ──────────────────────────────────────────
+              What used to be a separate "sports" build of the whole site. Now
+              any calendar can switch these on, so one deployment covers both —
+              and you can own a five-a-side calendar and a work calendar at once.
+              Takes effect for every member as soon as it is saved. */}
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-medium" style={{ color: 'var(--text-2)' }}>
+              Features
+            </span>
+            <div className="flex flex-col gap-1.5">
+              {FEATURE_OPTIONS.map(o => (
+                <label key={o.key} className="flex items-start gap-2 cursor-pointer">
+                  <input type="checkbox" className="mt-0.5"
+                    checked={vm.features[o.key]}
+                    onChange={e => vm.setFeature(o.key, e.target.checked)} />
+                  <span className="flex flex-col">
+                    <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>
+                      {o.icon} {o.label}
+                    </span>
+                    <span style={{ fontSize: 10.5, lineHeight: 1.35, color: 'var(--text-muted)' }}>
+                      {o.hint}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Turning a feature off hides it — it never deletes anything. Results
+              already recorded stay on their events and come back if you switch it
+              on again.
             </p>
           </div>
 

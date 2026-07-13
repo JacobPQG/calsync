@@ -169,6 +169,25 @@ function CreateForm({ vm, onCreated }: {
         </p>
       </div>
 
+      {/* What kind of calendar is this? The sports features used to be a separate
+          build of the whole site; now they are a property of one calendar, so you
+          can keep a five-a-side and a work calendar side by side. Individually
+          tunable afterwards in Manage. */}
+      <label className="flex items-start gap-2 cursor-pointer">
+        <input type="checkbox" className="mt-0.5"
+          checked={vm.newSports}
+          onChange={e => vm.setNewSports(e.target.checked)} />
+        <span className="flex flex-col">
+          <span className="text-xs font-medium" style={{ color: 'var(--text-2)' }}>
+            🏆 Sports calendar
+          </span>
+          <span style={{ fontSize: 10.5, lineHeight: 1.35, color: 'var(--text-muted)' }}>
+            Adds activities, match results, a leaderboard and monthly challenges.
+            You can change this later.
+          </span>
+        </span>
+      </label>
+
       <div className="flex justify-end">
         <button type="submit" disabled={!vm.canCreate || vm.submitting}
           className="px-4 py-1.5 text-sm rounded-lg text-white font-medium disabled:opacity-40"

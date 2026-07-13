@@ -6,20 +6,30 @@
 import { useMemo, useState } from 'react'
 import { format } from 'date-fns'
 import { useStore }   from '../store/useStore'
-import { FEATURES }   from '../lib/siteConfig'
 import { ACTIVITIES, activityLabel, type Activity } from './activities'
 import { buildStandings, recordedMatches, type Standing, type RecordedMatch } from './standings'
 import { buildChallenges, type ChallengeResult } from './challenges'
 
 export type Tab = 'leaderboard' | 'challenges'
 
-// Which tabs are enabled (admin feature flags) + selection state.
+// Which tabs this CALENDAR has on (its owner's choice) + selection state.
+//
+// The tab list is now per-calendar, so it can change under a mounted panel. The
+// selected tab is therefore resolved against the current list on every render
+// rather than merely initialized from it: a `useState` seeded once would leave
+// you parked on 'challenges' in a calendar that has challenges off, and the panel
+// would render a tab whose content it is not supposed to show.
 export function useStatsTabs() {
+  const features = useStore(s => s.features)
   const tabs: Tab[] = [
-    ...(FEATURES.leaderboard ? ['leaderboard' as const] : []),
-    ...(FEATURES.challenges  ? ['challenges'  as const] : []),
+    ...(features.leaderboard ? ['leaderboard' as const] : []),
+    ...(features.challenges  ? ['challenges'  as const] : []),
   ]
-  const [tab, setTab] = useState<Tab>(tabs[0] ?? 'leaderboard')
+
+  const [wanted, setTab] = useState<Tab>('leaderboard')
+  // Fall back to the first available tab whenever the wanted one is not on offer.
+  const tab = tabs.includes(wanted) ? wanted : (tabs[0] ?? 'leaderboard')
+
   return { tabs, tab, setTab }
 }
 

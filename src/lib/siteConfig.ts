@@ -1,50 +1,32 @@
 // ─── Site configuration ───────────────────────────────────────────────────────
-// The app ships as one codebase with admin-selectable "site variants". The
-// admin chooses which variant to deploy — and which optional elements are
-// active — at build time via Vite env files:
+// What is true of the whole DEPLOYMENT. Two values, and that is deliberate.
 //
-//   npm run build            → classic CalSync   (.env / repo secrets only)
-//   npm run build:sports     → sports variant    (.env.sports overlays .env)
+// There used to be a build-time "site variant" here (classic vs sports), selected
+// with `npm run build:sports` and a .env.sports overlay, which decided globally
+// whether the app had activities, scores, a leaderboard and challenges.
 //
-// Flags live in .env.sports (or repository variables in CI), never in code,
-// so activating/deactivating the leaderboard or challenges is a config edit +
-// redeploy — no source change. Components import from here only; nothing else
-// reads import.meta.env for these values.
-
-export type SiteMode = 'classic' | 'sports'
-
-function flag(name: string, fallback: boolean): boolean {
-  const raw = import.meta.env[name] as string | undefined
-  if (raw === undefined || raw === '') return fallback
-  return raw === 'true' || raw === '1'
-}
-
-export const SITE_MODE: SiteMode =
-  (import.meta.env.VITE_SITE_MODE as string | undefined) === 'sports'
-    ? 'sports'
-    : 'classic'
-
-// Test mode — enables the "fast user create" shortcut (name-only local personas,
-// no password/image). Set VITE_TEST_MODE=true ONLY for local development; the
-// start-*.bat launchers set it, deploy/CI never do. `import.meta.env.DEV` is an
-// extra guard so a production bundle can never expose it even if the var leaks.
-export const TEST_MODE: boolean =
-  import.meta.env.DEV && import.meta.env.VITE_TEST_MODE === 'true'
-
-export const IS_SPORTS = SITE_MODE === 'sports'
+// It is gone. Those are now per-CALENDAR features, chosen by each calendar's
+// owner in its Manage panel and stored on the calendar row (`calendars.features`,
+// db/schema/10_tables.sql). One deployment serves both shapes, and a user can own
+// a five-a-side calendar and a work calendar in the same session — which the
+// build-time flag made impossible.
+//
+// Read them from the store (`useStore().features`), which holds the OPEN
+// calendar's set. Do not reach for a global flag: there isn't one any more, and
+// the whole point is that the answer depends on which calendar you are looking at.
+// See types.ts (CalendarFeatures, isSportsCalendar) and ADR-14.
 
 // Displayed in the header and browser tab.
 export const SITE_NAME: string =
-  (import.meta.env.VITE_SITE_NAME as string | undefined)
-  ?? (IS_SPORTS ? 'PlaySync' : 'CalSync')
+  (import.meta.env.VITE_SITE_NAME as string | undefined) ?? 'CalSync'
 
-// Optional site elements. Defaults: everything on in sports mode, off in
-// classic — each individually overridable by the admin.
-export const FEATURES = {
-  /** Record match results on events and show them in the event detail. */
-  scores:      flag('VITE_FEATURE_SCORES',      IS_SPORTS),
-  /** Standings table (wins / draws / losses / points) + recent winners. */
-  leaderboard: flag('VITE_FEATURE_LEADERBOARD', IS_SPORTS),
-  /** Monthly activity challenges (most active, multi-sport). */
-  challenges:  flag('VITE_FEATURE_CHALLENGES',  IS_SPORTS),
-} as const
+// Test mode — enables the in-app dev tools (the Sandbox/Live backend switch) and
+// the fast user-create shortcut (name-only local personas, no password).
+//
+// Set VITE_TEST_MODE=true ONLY for local development; start.bat sets it, deploy/CI
+// never do. `import.meta.env.DEV` is an extra guard so a production bundle can
+// never expose it even if the var leaks into a build environment.
+export const TEST_MODE: boolean =
+  import.meta.env.DEV && import.meta.env.VITE_TEST_MODE === 'true'
+</content>
+</invoke>

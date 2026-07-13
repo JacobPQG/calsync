@@ -8,7 +8,6 @@
 //   • Behavior (validation, submit payload, tag rules) → useEventFormVM.ts.
 
 import type { CalEvent, RecurringRule, EventVisibility } from '../types'
-import { IS_SPORTS } from '../lib/siteConfig'
 import { ACTIVITIES } from '../sports/activities'
 import { TimePicker } from './timepicker/TimePicker'
 import { useEventFormVM } from './useEventFormVM'
@@ -91,7 +90,7 @@ export function EventForm({ date, existing, onClose }: Props) {
         <div className="flex items-center px-5 py-4 shrink-0" style={{ borderBottom: '0.5px solid var(--border)' }}>
           <div className="flex-1 min-w-0">
             <h3 className="font-semibold text-sm" style={{ color: 'var(--text)' }}>
-              {IS_SPORTS
+              {vm.isSports
                 ? (vm.isEdit ? 'Edit activity' : 'Add activity')
                 : (vm.isEdit ? 'Edit availability' : 'Add availability')}
             </h3>
@@ -108,7 +107,7 @@ export function EventForm({ date, existing, onClose }: Props) {
         <div className={`p-5 ${STYLE.bodyGap} flex-1`}>
 
           {/* Activity picker — sports variant's primary field */}
-          {IS_SPORTS && (
+          {vm.isSports && (
             <div>
               <label className="field-label">Sport / activity</label>
               <div className={`grid ${STYLE.activityCols} gap-1.5`} role="radiogroup" aria-label="Activity">
@@ -135,17 +134,17 @@ export function EventForm({ date, existing, onClose }: Props) {
 
           {/* Title */}
           <div>
-            <label className="field-label">{IS_SPORTS ? 'Title (optional)' : 'Title'}</label>
+            <label className="field-label">{vm.isSports ? 'Title (optional)' : 'Title'}</label>
             <input
               className="field-input"
-              placeholder={IS_SPORTS
+              placeholder={vm.isSports
                 ? 'e.g. Sunday five-a-side — defaults to the sport name'
                 : 'e.g. Free afternoon, Available for calls…'}
               value={f.title}
               onChange={e => f.setTitle(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && vm.submit()}
               maxLength={100}
-              autoFocus={!IS_SPORTS}
+              autoFocus={!vm.isSports}
             />
           </div>
 

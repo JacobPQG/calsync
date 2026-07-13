@@ -29,7 +29,37 @@ export interface Calendar {
   pendingCount: number
   myStatus:    MemberStatus     // where *I* stand in this calendar
   isOwner:     boolean
+  features:    CalendarFeatures // which optional elements this calendar has on
   createdAt:   string
+}
+
+// ── Per-calendar optional features (replaces the build-time site variant) ─────
+// The owner turns these on to make a calendar a "sports" calendar: activities,
+// recorded scores, a leaderboard. All off = the plain availability calendar.
+//
+// NOT a permission. These decide which UI a member is offered, not what they may
+// read — a match result lives inside the event's own JSON and is already governed
+// by the events policy. Turning `scores` off hides the button; it does not
+// retract a result anyone could already see.
+
+export interface CalendarFeatures {
+  /** Record match results on events and show them in the event detail. */
+  scores:      boolean
+  /** Standings table (wins / draws / losses / points) + recent winners. */
+  leaderboard: boolean
+  /** Monthly activity challenges (most active, multi-sport). */
+  challenges:  boolean
+}
+
+export const NO_FEATURES: CalendarFeatures = {
+  scores: false, leaderboard: false, challenges: false,
+}
+
+// Any of them on means this calendar is "a sports calendar": the event form shows
+// the activity picker and lets the title be optional. One derived predicate, so
+// the components cannot each invent their own answer.
+export function isSportsCalendar(f: CalendarFeatures | null | undefined): boolean {
+  return !!f && (f.scores || f.leaderboard || f.challenges)
 }
 
 // 'pending' — claimed an invite, but the owner has not confirmed them. The

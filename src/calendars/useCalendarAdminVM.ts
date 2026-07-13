@@ -13,7 +13,8 @@
 // `isOwner` — that is not a security boundary and must never be treated as one.
 
 import { useState, useEffect, useCallback } from 'react'
-import type { Calendar, CalendarMember } from '../types'
+import type { Calendar, CalendarFeatures, CalendarMember } from '../types'
+import { NO_FEATURES } from '../types'
 import {
   listCalendars, listMembers, updateCalendar, deleteCalendar,
   approveMember, rejectMember,
@@ -75,6 +76,16 @@ export interface CalendarAdminVM {
   // ── Settings ──────────────────────────────────────────────────────────────
   name:  string; setName:  (v: string) => void
   seats: number | null; setSeats: (v: number | null) => void
+
+  // Optional features, the owner's choice. Turning any of them on is what makes
+  // this "a sports calendar" — there is no separate site variant any more.
+  //
+  // Toggling one is a preference, not a permission: a result already recorded
+  // stays in the event's data and stays visible to whoever could see that event.
+  // Switching `scores` off hides the button, it does not retract anything.
+  features:   CalendarFeatures
+  setFeature: (key: keyof CalendarFeatures, on: boolean) => void
+
   canSave: boolean
   saving:  boolean
   save:    () => Promise<void>
@@ -115,6 +126,7 @@ export function useCalendarAdminVM(calendarId: string): CalendarAdminVM {
 
   const [name,          setName]          = useState('')
   const [seats,         setSeats]         = useState<number | null>(null)
+  const [features,      setFeatures]      = useState<CalendarFeatures>(NO_FEATURES)
   const [saving,        setSaving]        = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting,      setDeleting]      = useState(false)
@@ -132,7 +144,7 @@ export function useCalendarAdminVM(calendarId: string): CalendarAdminVM {
     setInvites(inv)
     // Seed the settings form from the server's copy, so it always opens showing
     // what is actually stored rather than whatever was last typed.
-    if (cal) { setName(cal.name); setSeats(cal.maxMembers) }
+    if (cal) { setName(cal.name); setSeats(cal.maxMembers); setFeatures(cal.features) }
     setLoading(false)
   }, [calendarId])
 
@@ -233,7 +245,7 @@ export function useCalendarAdminVM(calendarId: string): CalendarAdminVM {
       // The server refuses a cap below the current headcount — silently
       // un-approving people to satisfy a smaller number would be a surprising way
       // to lose access to your own calendar.
-      const errMsg = await updateCalendar(calendarId, clean, seats)
+      const errMsg = await updateCalendar(calendarId, clean, seats, features)
       if (errMsg) { setError(errMsg); return }
       await refresh()
     } finally {
@@ -259,8 +271,14 @@ export function useCalendarAdminVM(calendarId: string): CalendarAdminVM {
   const seatsUsed = approved.length
   const cap       = calendar?.maxMembers ?? null
   const seatsFree = cap === null ? null : Math.max(0, cap - seatsUsed)
-  const dirty     = calendar !== null &&
-    (name.trim() !== calendar.name || seats !== calendar.maxMembers)
+
+  const featuresDirty = calendar !== null && (
+    features.scores      !== calendar.features.scores ||
+    features.leaderboard !== calendar.features.leaderboard ||
+    features.challenges  !== calendar.features.challenges
+  )
+  const dirty = calendar !== null &&
+    (name.trim() !== calendar.name || seats !== calendar.maxMembers || featuresDirty)
 
   return {
     calendar, loading, error,
@@ -290,6 +308,10 @@ export function useCalendarAdminVM(calendarId: string): CalendarAdminVM {
 
     name, setName,
     seats, setSeats,
+
+    features,
+    setFeature: (key, on) => setFeatures(f => ({ ...f, [key]: on })),
+
     canSave: dirty && name.trim().length >= MIN_NAME,
     saving, save,
 
