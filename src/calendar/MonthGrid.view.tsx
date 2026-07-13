@@ -28,6 +28,21 @@ const STYLE = {
   },
 } as const
 
+// The de-identified "somebody is quietly free here" dot. Deliberately hollow and
+// colourless: a user dot carries an identity, this one must not.
+function hiddenDotStyle(size: number): React.CSSProperties {
+  return {
+    width: size, height: size, borderRadius: '50%',
+    border: '1px dashed var(--text-muted)', opacity: 0.75, flexShrink: 0,
+  }
+}
+
+function hiddenLabel(n: number): string {
+  return n === 1
+    ? 'Someone has something here (anonymous)'
+    : `${n} others have something here (anonymous)`
+}
+
 // ─── MonthGrid ────────────────────────────────────────────────────────────────
 
 export function MonthGrid() {
@@ -92,7 +107,11 @@ function DayCell({ cell, onClick }: { cell: DayCellVM; onClick: () => void }) {
       type="button"
       className={cls}
       onClick={onClick}
-      aria-label={`${cell.date}${cell.isOverlap ? `, ${cell.userCount} people available` : ''}`}
+      aria-label={[
+        cell.date,
+        cell.isOverlap  ? `${cell.userCount} people available` : '',
+        cell.hiddenCount ? hiddenLabel(cell.hiddenCount)       : '',
+      ].filter(Boolean).join(', ')}
       aria-pressed={cell.selected}
       style={{ minHeight: STYLE.cellMinHeight }}
     >
@@ -116,13 +135,18 @@ function DayCell({ cell, onClick }: { cell: DayCellVM; onClick: () => void }) {
         )}
       </div>
 
-      {/* User colour dots — one per person */}
-      {cell.users.length > 0 && (
+      {/* User colour dots — one per person, plus hollow dots for anonymous
+          events we're not allowed to attribute to anyone yet. */}
+      {(cell.users.length > 0 || cell.hiddenCount > 0) && (
         <div className="flex gap-0.5 flex-wrap">
           {cell.users.map(u => (
             <div key={u.id} title={u.name}
               style={{ width: STYLE.dotSize, height: STYLE.dotSize, borderRadius: '50%',
                        background: u.color, flexShrink: 0 }} />
+          ))}
+          {Array.from({ length: cell.hiddenCount }, (_, i) => (
+            <div key={`hidden-${i}`} title={hiddenLabel(cell.hiddenCount)}
+              style={hiddenDotStyle(STYLE.dotSize)} />
           ))}
         </div>
       )}
@@ -175,11 +199,15 @@ function RankingCard({ card, onClick }: { card: RankingCardVM; onClick: () => vo
         {card.weekdayNum}
       </div>
 
-      {/* User dots */}
+      {/* User dots (+ hollow dots for withheld anonymous events) */}
       <div className="flex gap-0.5 mt-1">
         {card.users.map(u => (
           <div key={u.id} title={u.name}
             style={{ width: STYLE.dotSize, height: STYLE.dotSize, borderRadius: '50%', background: u.color }} />
+        ))}
+        {Array.from({ length: card.hiddenCount }, (_, i) => (
+          <div key={`hidden-${i}`} title={hiddenLabel(card.hiddenCount)}
+            style={hiddenDotStyle(STYLE.dotSize)} />
         ))}
         {card.isOverlap && (
           <span style={{ fontSize: 8, color: 'var(--overlap-text)', marginLeft: 2, lineHeight: '6px' }}>✓</span>
@@ -207,9 +235,12 @@ function RankingCard({ card, onClick }: { card: RankingCardVM; onClick: () => vo
         </div>
       )}
 
-      {/* Event count */}
+      {/* Event count. A day can rank on withheld events alone, in which case
+          there is no count to show — only the hint that somebody is there. */}
       <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 2 }}>
-        {card.eventCount} event{card.eventCount !== 1 ? 's' : ''}
+        {card.eventCount > 0
+          ? `${card.eventCount} event${card.eventCount !== 1 ? 's' : ''}`
+          : 'someone’s free'}
       </div>
     </button>
   )

@@ -1,24 +1,28 @@
 // ─── Auth hook ────────────────────────────────────────────────────────────────
 // Wraps Supabase Auth behind CalSync's anonymous credential scheme
-// (username + secret word + memory image — see credentials.ts). When
-// SUPABASE_ENABLED is false the hook returns inert values so the app runs
-// in localStorage mode with no env vars configured.
+// (username + password — see credentials.ts). When SUPABASE_ENABLED is false the
+// hook returns inert values so the app runs in localStorage mode with no env
+// vars configured.
 //
 // Approval flow: new accounts exist but are NOT approved. RLS blocks all
 // data access until the admin flips users.approved in the dashboard. The
 // hook exposes `approved` so the UI can show a "pending approval" state.
+//
+// Sign-up is invite-gated and now happens through the QR claim screen
+// (invite/ClaimScreen): the code is validated, the account created, and the code
+// redeemed — atomically single-use, so the same QR can never make a second
+// account. See ADR-9 / ADR-10 and lib/schema.sql.
 
 import { useState, useEffect, useCallback } from 'react'
 import type { User as SupabaseUser } from '@supabase/supabase-js'
 import { supabase, SUPABASE_ENABLED } from '../lib/supabase'
 import { log } from '../lib/log'
-import { toAccountEmail, derivePassword } from './credentials'
+import { toAccountEmail, legacyPassword } from './credentials'
 
 export interface SignUpInput {
   inviteCode: string
   username:   string
-  secretWord: string
-  imageId:    string
+  password:   string
 }
 
 export interface AuthSession {
@@ -29,7 +33,9 @@ export interface AuthSession {
   approved:        boolean | null     // null = unknown / not signed in
 
   // Returns null on success, or a human-readable error message.
-  signIn: (username: string, secretWord: string, imageId: string) => Promise<string | null>
+  // `legacyImageId` is only for pre-ADR-9 accounts whose password was
+  // `word:image`; the sign-in form offers it as an optional fallback.
+  signIn: (username: string, password: string, legacyImageId?: string) => Promise<string | null>
 
   // Returns the new auth uid on success (needed to create the profile row).
   signUp: (input: SignUpInput) => Promise<{ userId: string | null; error: string | null }>
@@ -95,35 +101,57 @@ export function useAuthSession(): AuthSession {
 
   // ── Actions ─────────────────────────────────────────────────────────────────
 
-  async function signIn(username: string, secretWord: string, imageId: string): Promise<string | null> {
+  // Sign in with username + password.
+  //
+  // Legacy fallback: accounts created before ADR-9 hashed `<word>:<imageId>`, a
+  // password the user cannot restate under the new scheme. If the modern attempt
+  // is rejected AND the caller supplied a legacy image, we retry with the old
+  // derivation. Only the *rejection* path retries, so a correct modern password
+  // never costs a second round trip, and a wrong one costs at most one.
+  //
+  // This is additive: it can only let in someone who knows the old word AND the
+  // old image — exactly the pair that already worked.
+  async function signIn(
+    username: string, password: string, legacyImageId?: string,
+  ): Promise<string | null> {
     if (!SUPABASE_ENABLED) return 'Supabase is not configured (see .env.example).'
-    const { error } = await supabase.auth.signInWithPassword({
-      email:    toAccountEmail(username),
-      password: derivePassword(secretWord, imageId),
-    })
-    if (error) log.warn('auth', 'sign-in failed')  // no username in logs
-    return error ? friendlyAuthError(error.message) : null
+    const email = toAccountEmail(username)
+
+    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    if (!error) return null
+
+    if (legacyImageId) {
+      const { error: legacyErr } = await supabase.auth.signInWithPassword({
+        email, password: legacyPassword(password, legacyImageId),
+      })
+      if (!legacyErr) {
+        log.debug('auth', 'signed in via legacy credential scheme')
+        return null
+      }
+    }
+
+    log.warn('auth', 'sign-in failed')  // no username, no password, in logs
+    return friendlyAuthError(error.message)
   }
 
   async function signUp(
-    { inviteCode, username, secretWord, imageId }: SignUpInput,
+    { inviteCode, username, password }: SignUpInput,
   ): Promise<{ userId: string | null; error: string | null }> {
     if (!SUPABASE_ENABLED)
       return { userId: null, error: 'Supabase is not configured (see .env.example).' }
 
     // 1. Pre-validate the invite code so we don't create orphan auth users.
+    //    This is a courtesy check only — redeem_invite (step 3) is the atomic
+    //    gate that actually enforces single use.
     const { data: valid, error: vErr } = await supabase.rpc('validate_invite', { invite: inviteCode })
     if (vErr) {
       log.error('auth', 'validate_invite RPC failed', vErr.message)
       return { userId: null, error: 'Could not verify the invite code — try again.' }
     }
-    if (!valid) return { userId: null, error: 'Invalid or already-used invite code.' }
+    if (!valid) return { userId: null, error: 'This invite has already been used.' }
 
-    // 2. Create the auth account with derived credentials.
-    const { data, error } = await supabase.auth.signUp({
-      email:    toAccountEmail(username),
-      password: derivePassword(secretWord, imageId),
-    })
+    // 2. Create the auth account.
+    const { data, error } = await supabase.auth.signUp({ email: toAccountEmail(username), password })
     if (error)      return { userId: null, error: friendlyAuthError(error.message) }
     if (!data.user) return { userId: null, error: 'Sign-up succeeded but no user was returned.' }
     if (!data.session) {
@@ -135,13 +163,20 @@ export function useAuthSession(): AuthSession {
       }
     }
 
-    // 3. Burn the invite code server-side (SECURITY DEFINER stamps it onto
-    //    the profile so the admin can see which code created this account).
+    // 3. Burn the invite code server-side. This is THE single-use gate: the
+    //    UPDATE inside redeem_invite matches `used_by is null`, so if two people
+    //    scan the same QR at once exactly one UPDATE finds a row and the other
+    //    gets false. It also stamps the code onto the profile, so the admin can
+    //    see which invite produced which account.
     const { data: redeemed, error: rErr } = await supabase.rpc('redeem_invite', { invite: inviteCode })
     if (rErr || !redeemed) {
       log.error('auth', 'redeem_invite failed for new account', rErr?.message ?? 'code not redeemable')
-      // Account exists but unproven — it stays unapproved; tell the user.
-      return { userId: null, error: 'Invite code could not be redeemed. Contact the administrator.' }
+      // The auth account now exists but holds no redeemed invite, so it will
+      // never be approved — it is inert, not a backdoor. Still, say so plainly.
+      return {
+        userId: null,
+        error:  'That invite was already claimed by someone else. Ask the administrator for a new one.',
+      }
     }
 
     return { userId: data.user.id, error: null }

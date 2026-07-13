@@ -7,12 +7,18 @@
 // Without those env vars the app falls back to localStorage automatically.
 
 import { createClient } from '@supabase/supabase-js'
+import { IS_SANDBOX } from '../dev/devMode'
 
 const url = import.meta.env.VITE_SUPABASE_URL  as string | undefined
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
 
 // Read throughout the codebase to decide which storage/auth path to take.
-export const SUPABASE_ENABLED = !!(url && key)
+//
+// Sandbox mode (local dev only — see dev/devMode.ts) forces this false even when
+// credentials ARE configured, which is what puts the whole app on the
+// localStorage path: no client, no auth, no RLS, no server to refuse anything.
+// It is not a bypass of Supabase's rules — it is the absence of Supabase.
+export const SUPABASE_ENABLED = !!(url && key) && !IS_SANDBOX
 
 // The cast is safe because every caller guards with SUPABASE_ENABLED first.
 // Using `null as unknown as …` rather than a conditional export keeps

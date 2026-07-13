@@ -8,7 +8,7 @@
 // edit MonthGrid.view.tsx instead. If you're changing behavior (what counts as
 // a "best day", navigation, selection), edit here.
 
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import {
   startOfMonth, endOfMonth, startOfWeek, endOfWeek,
   eachDayOfInterval, format, isSameMonth, isToday, parseISO,
@@ -33,6 +33,9 @@ export interface DayCellVM {
   isOverlap: boolean
   users:     User[]       // one colour dot per unique user
   userCount: number       // === users.length; convenience for the overlap badge
+  // Unmatched anonymous events by other people. Renders as a de-identified
+  // "somebody has something here" hint — never a name, time, or title.
+  hiddenCount: number
 }
 
 // One "best days" ranking card.
@@ -46,6 +49,7 @@ export interface RankingCardVM {
   tags:       string[]    // up to 3 unique tags across the day's events
   emojis:     string[]    // up to 4 unique activity emojis (sports variant)
   eventCount: number
+  hiddenCount: number     // de-identified "someone's free here too" hint
 }
 
 export interface MonthGridVM {
@@ -66,20 +70,32 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 export function useMonthGridVM(): MonthGridVM {
   const {
-    currentMonth, events, users,
+    currentMonth, events, users, activeUserId,
+    hiddenCounts, refreshHiddenCounts,
     selectedDate, setSelectedDate,
     navigateMonth, setCurrentMonth,
   } = useStore()
 
-  // Grid days + per-day summaries for the visible 6-week window.
-  const { days, summaries } = useMemo(() => {
-    const start = startOfWeek(startOfMonth(currentMonth), { weekStartsOn: 1 })
-    const end   = endOfWeek(endOfMonth(currentMonth),     { weekStartsOn: 1 })
-    return {
-      days:      eachDayOfInterval({ start, end }),
-      summaries: buildDaySummaries(events, users, start, end),
-    }
-  }, [currentMonth, events, users])
+  // The visible 6-week window. Derived once — it also bounds the hidden-count
+  // fetch, so the two always agree on which dates are on screen.
+  const { start, end } = useMemo(() => ({
+    start: startOfWeek(startOfMonth(currentMonth), { weekStartsOn: 1 }),
+    end:   endOfWeek(endOfMonth(currentMonth),     { weekStartsOn: 1 }),
+  }), [currentMonth])
+
+  // Under RLS the withheld events never reach us, so the server has to tell us
+  // how many there are. Re-fetch whenever the window moves. (No-op in
+  // localStorage mode, where the client already holds every event.)
+  useEffect(() => {
+    refreshHiddenCounts(format(start, 'yyyy-MM-dd'), format(end, 'yyyy-MM-dd'))
+  }, [start, end, events, refreshHiddenCounts])
+
+  // Grid days + per-day summaries, as seen by the active user (other people's
+  // unmatched anonymous events are withheld; only their tally comes through).
+  const { days, summaries } = useMemo(() => ({
+    days:      eachDayOfInterval({ start, end }),
+    summaries: buildDaySummaries(events, users, start, end, activeUserId, hiddenCounts),
+  }), [start, end, events, users, activeUserId, hiddenCounts])
 
   // Resolve each grid day into a flat, render-ready cell.
   const cells = useMemo<DayCellVM[]>(() => days.map(day => {
@@ -94,13 +110,17 @@ export function useMonthGridVM(): MonthGridVM {
       isOverlap: summary?.isOverlap ?? false,
       users:     summary?.users ?? [],
       userCount: summary?.users.length ?? 0,
+      hiddenCount: summary?.hiddenCount ?? 0,
     }
   }), [days, summaries, currentMonth, selectedDate])
 
   // "Best days": overlap first, then most users, then most events.
+  // A day with nothing but withheld anonymous events still earns a card — the
+  // hint that somebody is quietly free there is precisely what's worth ranking.
   const ranking = useMemo<RankingCardVM[]>(() => {
     return Array.from(summaries.values())
-      .filter(s => s.users.length >= 1 && isSameMonth(parseISO(s.date), currentMonth))
+      .filter(s => (s.users.length >= 1 || s.hiddenCount > 0)
+                && isSameMonth(parseISO(s.date), currentMonth))
       .sort((a, b) =>
         (a.isOverlap === b.isOverlap ? 0 : a.isOverlap ? -1 : 1)
         || b.users.length - a.users.length
@@ -142,5 +162,6 @@ function summaryToCard(s: DaySummary, selectedDate: string | null): RankingCardV
                   s.instances.map(i => activityById(i.event.activity)?.emoji).filter(Boolean) as string[]
                 )].slice(0, 4),
     eventCount: s.instances.length,
+    hiddenCount: s.hiddenCount,
   }
 }

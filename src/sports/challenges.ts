@@ -31,7 +31,13 @@ function collectMonthStats(events: CalEvent[], users: User[], month: Date): User
   const stats = new Map<string, UserMonthStats>(users.map(u =>
     [u.id, { user: u, sessions: 0, activities: new Set<string>(), groupSessions: 0 }]))
 
-  const summaries = buildDaySummaries(events, users, startOfMonth(month), endOfMonth(month))
+  // viewerId=null ON PURPOSE — the leaderboard is a public scoreboard that names
+  // people and counts their sessions. Building it for any particular viewer
+  // would let unmatched anonymous events into a shared ranking ("Ana — 7
+  // sessions"), publishing exactly what anonymity withholds. Only events already
+  // visible to everyone (public, or matched) may score.
+  const summaries = buildDaySummaries(
+    events, users, startOfMonth(month), endOfMonth(month), null)
   for (const day of summaries.values()) {
     for (const inst of day.instances) {
       const s = stats.get(inst.user.id)

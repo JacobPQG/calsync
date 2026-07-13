@@ -7,9 +7,10 @@
 //   • Colours → CSS vars in src/index.css.
 //   • Behavior (validation, submit payload, tag rules) → useEventFormVM.ts.
 
-import type { CalEvent, RecurringRule } from '../types'
+import type { CalEvent, RecurringRule, EventVisibility } from '../types'
 import { IS_SPORTS } from '../lib/siteConfig'
 import { ACTIVITIES } from '../sports/activities'
+import { TimePicker } from './timepicker/TimePicker'
 import { useEventFormVM } from './useEventFormVM'
 
 interface Props {
@@ -35,18 +36,19 @@ const FREQ_OPTIONS = [
 
 const DOW_LABELS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']
 
-// 30-minute increments: 0, 0.5 … 23.5 (start) and 0.5 … 24 (end).
-const START_HOURS = Array.from({ length: 48 }, (_, i) => i * 0.5)
-const END_HOURS   = Array.from({ length: 48 }, (_, i) => (i + 1) * 0.5)
-
-function fmtHalf(h: number): string {
-  if (h === 24) return 'Midnight'
-  const hour = Math.floor(h)
-  const min  = h % 1 !== 0 ? ':30' : ':00'
-  if (hour === 0)  return `12${min} AM`
-  if (hour === 12) return `12${min} PM`
-  return hour < 12 ? `${hour}${min} AM` : `${hour - 12}${min} PM`
-}
+// Visibility choices. Anonymous is the standard — it leads.
+const VISIBILITY_OPTIONS: {
+  value: EventVisibility; icon: string; label: string; hint: string
+}[] = [
+  {
+    value: 'anonymous', icon: '🕶️', label: 'Anonymous',
+    hint:  'Only reported if others coincide',
+  },
+  {
+    value: 'public', icon: '📣', label: 'Public',
+    hint:  'Others can see it — and be invited',
+  },
+]
 
 function chipStyle(active: boolean): React.CSSProperties {
   return {
@@ -147,21 +149,44 @@ export function EventForm({ date, existing, onClose }: Props) {
             />
           </div>
 
-          {/* Hours — 30-minute increments */}
+          {/* Hours — 30-minute increments, morning/evening shown as parallel columns */}
           <div className="flex gap-3">
-            <div className="flex-1">
+            <div className="flex-1 min-w-0">
               <label className="field-label">From</label>
-              <select className="field-input" value={f.startHour}
-                onChange={e => f.setStartHour(parseFloat(e.target.value))}>
-                {START_HOURS.map(h => <option key={h} value={h}>{fmtHalf(h)}</option>)}
-              </select>
+              <TimePicker ariaLabel="From" value={f.startHour} onChange={f.setStartHour} />
             </div>
-            <div className="flex-1">
+            <div className="flex-1 min-w-0">
               <label className="field-label">To</label>
-              <select className="field-input" value={f.endHour}
-                onChange={e => f.setEndHour(parseFloat(e.target.value))}>
-                {END_HOURS.filter(h => h > f.startHour).map(h => <option key={h} value={h}>{fmtHalf(h)}</option>)}
-              </select>
+              <TimePicker ariaLabel="To" value={f.endHour} onChange={f.setEndHour} min={f.startHour} />
+            </div>
+          </div>
+
+          {/* Visibility — anonymous (default) vs public */}
+          <div>
+            <label className="field-label">Visibility</label>
+            <div className="grid grid-cols-2 gap-1.5" role="radiogroup" aria-label="Visibility">
+              {VISIBILITY_OPTIONS.map(o => {
+                const active = f.visibility === o.value
+                return (
+                  <button key={o.value} type="button" role="radio" aria-checked={active}
+                    onClick={() => f.setVisibility(o.value)}
+                    className="rounded-lg border px-2.5 py-2 text-left transition-all"
+                    style={{
+                      borderColor: active ? 'var(--accent)' : 'var(--border)',
+                      background:  active ? 'var(--accent-bg)' : 'var(--bg-subtle)',
+                      boxShadow:   active ? '0 0 0 2px var(--accent-bg)' : 'none',
+                    }}>
+                    <span className="flex items-center gap-1.5 text-xs font-medium"
+                      style={{ color: active ? 'var(--accent)' : 'var(--text-2)' }}>
+                      <span aria-hidden style={{ fontSize: 13 }}>{o.icon}</span>
+                      {o.label}
+                    </span>
+                    <span className="block mt-0.5" style={{ fontSize: 10.5, lineHeight: 1.35, color: 'var(--text-muted)' }}>
+                      {o.hint}
+                    </span>
+                  </button>
+                )
+              })}
             </div>
           </div>
 

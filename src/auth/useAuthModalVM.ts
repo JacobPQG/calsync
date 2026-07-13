@@ -1,7 +1,15 @@
 // ─── AuthModal ViewModel ──────────────────────────────────────────────────────
-// All state + submit orchestration for the anonymous sign-in / sign-up modal
-// (username + secret word + memory image, invite-gated sign-up). The view
-// (AuthModal.view.tsx) binds to these fields and renders per `mode`.
+// State + submit orchestration for the sign-in modal (username + password).
+//
+// SIGN-UP LIVES ELSEWHERE. Accounts are created only by claiming a QR invite
+// (invite/ClaimScreen) — that is what makes an invite one-shot and lets it carry
+// the invitee's name. This modal therefore signs in and nothing else; the old
+// "create an account" tab is gone, and with it the invite-code text field.
+//
+// LEGACY SIGN-IN: accounts created before ADR-9 have a password of
+// `<secret word>:<memory image>`. They cannot restate that under the new scheme,
+// so the modal offers an optional image picker; when one is chosen, useAuth
+// retries with the old derivation. New accounts never need it.
 //
 // This wraps the lower-level auth hook (useAuthSession) and the store; the view
 // never calls Supabase or the store directly.
@@ -10,104 +18,76 @@ import { useState } from 'react'
 import { useAuthSession }      from './useAuth'
 import { useStore }            from '../store/useStore'
 import { supabase, SUPABASE_ENABLED } from '../lib/supabase'
-import { usernameError, secretWordError, normalizeUsername } from './credentials'
-
-export type AuthMode = 'signin' | 'signup' | 'pending'
+import { usernameError, normalizeUsername } from './credentials'
 
 export interface AuthModalVM {
-  mode:        AuthMode
-  switchMode:  () => void          // toggles signin ⇄ signup, clears errors
-
   // Bound fields.
-  inviteCode:  string; setInviteCode:  (v: string) => void
-  username:    string; setUsername:    (v: string) => void
-  secretWord:  string; setSecretWord:  (v: string) => void
-  confirmWord: string; setConfirmWord: (v: string) => void
-  imageId:     string | null; setImageId: (v: string) => void
+  username: string; setUsername: (v: string) => void
+  password: string; setPassword: (v: string) => void
 
-  error:       string | null
-  submitting:  boolean
-  submit:      (e: React.FormEvent) => Promise<void>
+  // Legacy escape hatch for pre-ADR-9 accounts.
+  showLegacy:    boolean; setShowLegacy: (v: boolean) => void
+  legacyImageId: string | null; setLegacyImageId: (v: string) => void
 
-  // For the "pending approval" screen.
-  normalizedUsername: string
+  error:      string | null
+  submitting: boolean
+  submit:     (e: React.FormEvent) => Promise<void>
 }
 
 export function useAuthModalVM(onClose: () => void): AuthModalVM {
   const auth  = useAuthSession()
   const store = useStore()
 
-  const [mode,        setMode]        = useState<AuthMode>('signin')
-  const [inviteCode,  setInviteCode]  = useState('')
-  const [username,    setUsername]    = useState('')
-  const [secretWord,  setSecretWord]  = useState('')
-  const [confirmWord, setConfirmWord] = useState('')
-  const [imageId,     setImageId]     = useState<string | null>(null)
-  const [error,       setError]       = useState<string | null>(null)
-  const [submitting,  setSubmitting]  = useState(false)
+  const [username,      setUsername]      = useState('')
+  const [password,      setPassword]      = useState('')
+  const [showLegacy,    setShowLegacy]    = useState(false)
+  const [legacyImageId, setLegacyImageId] = useState<string | null>(null)
+  const [error,         setError]         = useState<string | null>(null)
+  const [submitting,    setSubmitting]    = useState(false)
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
 
-    if (!imageId) { setError('Pick your memory image.'); return }
-    const uErr = usernameError(username); if (uErr) { setError(uErr); return }
-    const wErr = secretWordError(secretWord); if (wErr) { setError(wErr); return }
+    const uErr = usernameError(username)
+    if (uErr) { setError(uErr); return }
+    if (password.length === 0) { setError('Enter your password.'); return }
 
     setSubmitting(true)
-    if (mode === 'signup') await handleSignUp(imageId)
-    else                   await handleSignIn(imageId)
-    setSubmitting(false)
-  }
+    try {
+      // Pass the legacy image only when the user actually opened that section —
+      // otherwise a stale selection would trigger a pointless second round trip.
+      const errMsg = await auth.signIn(
+        username, password,
+        showLegacy && legacyImageId ? legacyImageId : undefined,
+      )
+      if (errMsg) { setError(errMsg); return }
+      if (!SUPABASE_ENABLED) { onClose(); return }
 
-  async function handleSignIn(img: string) {
-    const errMsg = await auth.signIn(username, secretWord, img)
-    if (errMsg) { setError(errMsg); return }
-    if (!SUPABASE_ENABLED) { onClose(); return }
+      // auth state updates async — read the session directly for the uid.
+      const { data: { session } } = await supabase.auth.getSession()
+      const uid = session?.user.id
+      if (!uid) { onClose(); return }
 
-    // auth state updates async — read the session directly for the uid.
-    const { data: { session } } = await supabase.auth.getSession()
-    const uid = session?.user.id
-    if (!uid) { onClose(); return }
+      // The profile row is created when the invite is claimed. If it is missing,
+      // this is a pre-existing account whose row never landed — recreate it
+      // rather than leaving the user with no identity in the UI.
+      const name = normalizeUsername(username)
+      if (!store.users.some(u => u.id === uid)) await store.createAuthUser(uid, name, name)
+      else                                      store.setActiveUser(uid)
 
-    // Ensure a CalSync profile exists (normally created at sign-up).
-    const name = normalizeUsername(username)
-    const existing = store.users.find(u => u.id === uid)
-    if (!existing) await store.createAuthUser(uid, name, name)
-    else           store.setActiveUser(uid)
-
-    await auth.refreshApproval()
-    onClose()
-  }
-
-  async function handleSignUp(img: string) {
-    if (inviteCode.trim().length === 0) { setError('An invite code is required.'); return }
-    if (secretWord !== confirmWord)     { setError('Secret words do not match.');  return }
-
-    const { userId, error: errMsg } = await auth.signUp({
-      inviteCode: inviteCode.trim(), username, secretWord, imageId: img,
-    })
-    if (errMsg)  { setError(errMsg); return }
-    if (!userId) { setError('Sign-up failed — no user id returned.'); return }
-
-    // Create the profile row (id = auth.uid() so RLS ownership works).
-    const name = normalizeUsername(username)
-    await store.createAuthUser(userId, name, name)
-
-    setMode('pending')   // account exists but unapproved
+      await auth.refreshApproval()
+      onClose()
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return {
-    mode,
-    switchMode: () => { setMode(mode === 'signin' ? 'signup' : 'signin'); setError(null) },
-    inviteCode,  setInviteCode,
-    username,    setUsername,
-    secretWord,  setSecretWord,
-    confirmWord, setConfirmWord,
-    imageId,     setImageId,
-    error,
-    submitting,
-    submit,
-    normalizedUsername: normalizeUsername(username),
+    username, setUsername,
+    password, setPassword,
+    showLegacy, setShowLegacy,
+    legacyImageId, setLegacyImageId,
+    error, submitting, submit,
   }
 }

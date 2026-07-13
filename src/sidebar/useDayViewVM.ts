@@ -16,6 +16,7 @@ import type { CalEvent, EventInstance } from '../types'
 import { useStore }          from '../store/useStore'
 import { buildDaySummaries } from '../engine/recurrence'
 import { safeUrl }           from '../utils/safeUrl'
+import { isPublic, hasCoincidence } from '../engine/visibility'
 import { FEATURES }          from '../lib/siteConfig'
 import { activityById, activityLabel } from '../sports/activities'
 
@@ -101,6 +102,9 @@ export interface DayViewVM {
   overlapNames: string             // "Ana · Bo available" text (empty if none)
   instances:    EventInstance[]    // de-duped events for the selected day
   isToday:      boolean
+  // Other people's unmatched anonymous events on this day. Shown as a
+  // de-identified count only ("2 others have something here, unmatched").
+  hiddenCount:  number
 
   // Event-detail state (null = show the timeline).
   activeEvent:   EventInstance | null
@@ -120,17 +124,22 @@ export interface DayViewVM {
 }
 
 export function useDayViewVM(): DayViewVM {
-  const { selectedDate, events, users, deleteEvent } = useStore()
+  const {
+    selectedDate, events, users, activeUserId, hiddenCounts, deleteEvent,
+  } = useStore()
 
   const [showAddForm,  setShowAddForm]  = useState(false)
   const [activeEvent,  setActiveEvent]  = useState<EventInstance | null>(null)
   const [editingEvent, setEditingEvent] = useState<CalEvent | null>(null)
 
+  // Reuses the store's hidden-count map, which MonthGrid keeps fresh for the
+  // visible window — the selected day is always inside it, so no extra fetch.
   const summary = useMemo(() => {
     if (!selectedDate) return null
     const d = parseISO(selectedDate)
-    return buildDaySummaries(events, users, d, d).get(selectedDate) ?? null
-  }, [selectedDate, events, users])
+    return buildDaySummaries(events, users, d, d, activeUserId, hiddenCounts)
+      .get(selectedDate) ?? null
+  }, [selectedDate, events, users, activeUserId, hiddenCounts])
 
   // Reset detail/edit state whenever the day changes.
   useEffect(() => { setActiveEvent(null); setEditingEvent(null) }, [selectedDate])
@@ -146,6 +155,7 @@ export function useDayViewVM(): DayViewVM {
       ? `${summary.users.map(u => u.name).join(' · ')} available` : '',
     instances,
     isToday:      selectedDate ? dateFnsIsToday(parseISO(selectedDate)) : false,
+    hiddenCount:  summary?.hiddenCount ?? 0,
 
     activeEvent,
     openEvent:  setActiveEvent,
@@ -216,6 +226,11 @@ export interface EventDetailVM {
   mapsUrl:      string | null
   eventUrl:     string | null
   recurrenceLabel: string | null // "Weekly · until 2026-08-01", or null
+
+  // Visibility, explained in the owner's own terms. Non-owners never see this —
+  // by the time they can open an event it is public or already matched, so the
+  // badge would tell them nothing.
+  visibilityBadge: { icon: string; label: string; hint: string } | null
 }
 
 /**
@@ -223,13 +238,40 @@ export interface EventDetailVM {
  * the store so a just-recorded result shows without re-selecting the day.
  */
 export function useEventDetailVM(instance: EventInstance): EventDetailVM {
-  const { activeUserId, users } = useStore()
+  const { activeUserId, users, events } = useStore()
   const liveEvent = useStore(s => s.events.find(e => e.id === instance.event.id))
 
   const { user, date } = instance
   const event   = liveEvent ?? instance.event
   const color   = event.color ?? user.color
   const isOwner = event.userId === activeUserId
+
+  // Has anyone else landed on this event's slot?
+  //
+  // This is computed from the events WE hold — which, in Supabase mode, RLS has
+  // already filtered. So it detects a match we can see, and it cannot rule out
+  // one we can't: someone outside our share graph may have coincided with this
+  // event and been shown it, without their event ever reaching us.
+  //
+  // The badge below is therefore worded to claim only what this can support. It
+  // never promises "nobody has seen this" — an over-confident privacy indicator
+  // is worse than a vague one, because it invites the user to write something
+  // they'd only write if they believed it were truly unseen.
+  const revealed = useMemo(() => {
+    const d = parseISO(date)
+    const sameDay = buildDaySummaries(events, users, d, d, null).get(date)?.instances ?? []
+    return hasCoincidence(event, sameDay)
+  }, [event, events, users, date])
+
+  const visibilityBadge = !isOwner ? null
+    : isPublic(event)
+      ? { icon: '📣', label: 'Public',
+          hint: 'Everyone you share with can see this, and that it is yours.' }
+    : revealed
+      ? { icon: '👀', label: 'Anonymous · matched',
+          hint: 'Someone else coincides here, so this is now visible to them.' }
+      : { icon: '🕶️', label: 'Anonymous',
+          hint: 'Shown to someone only once their own event overlaps this one. Until then they see only that somebody has something on this day.' }
 
   const winningScore = event.result
     ? Math.max(...event.result.teams.map(t => t.score)) : null
@@ -277,6 +319,7 @@ export function useEventDetailVM(instance: EventInstance): EventDetailVM {
     mapsUrl:  safeUrl(rawMapsUrl),
     eventUrl: safeUrl(event.eventUrl),
     recurrenceLabel,
+    visibilityBadge,
   }
 }
 

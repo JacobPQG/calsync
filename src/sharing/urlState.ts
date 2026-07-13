@@ -93,6 +93,16 @@ export function decodeStateFromUrl(): ShareableState | null {
 }
 
 // ── Share helpers ─────────────────────────────────────────────────────────────
+//
+// ⚠ These serialize whatever events you hand them, verbatim, into a link that
+// anyone holding it can read. An anonymous event (the default) is meant to stay
+// hidden until someone coincides with it — putting one in a share URL publishes
+// it outright, to everybody, forever.
+//
+// So: pass only events the recipient is already entitled to see. Filter with
+// engine/visibility.ts (filterForViewer, or isPublic for a link that may reach
+// anyone) BEFORE calling these. They deliberately do not filter for you —
+// they cannot know who the link is for.
 
 // Build a full shareable URL containing the encoded state.
 export function buildShareUrl(users: User[], events: CalEvent[]): string {

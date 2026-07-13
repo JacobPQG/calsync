@@ -16,6 +16,8 @@ import * as storage             from './storage'
 import { nanoid }               from 'nanoid'
 import { decodeStateFromUrl }   from '../sharing/urlState'
 import { supabase, SUPABASE_ENABLED } from '../lib/supabase'
+import { IS_SANDBOX }           from '../dev/devMode'
+import { log }                  from '../lib/log'
 
 const USER_COLORS = [
   '#7F77DD', '#1D9E75', '#D85A30', '#D4537E',
@@ -27,8 +29,26 @@ const USER_COLORS = [
 interface StoreState {
   // ── Persistent data ──────────────────────────────────────────────────────
   users:        User[]
+  // Events of the ACTIVE CALENDAR only (ADR-12). The app shows one calendar at a
+  // time and the calendar is the privacy boundary, so mixing them in one array
+  // would be both wrong on screen and a trap for every consumer downstream.
   events:       CalEvent[]
   activeUserId: string | null
+
+  // Which calendar is open. null = the home view (no calendar selected), which is
+  // the landing state: you pick a calendar before you see any events.
+  activeCalendarId: string | null
+  // Open a calendar (or null to go home). Loads that calendar's events and
+  // re-points the realtime subscription at it.
+  openCalendar: (calendarId: string | null) => Promise<void>
+
+  // Per-date counts of anonymous events RLS is withholding from us (Supabase
+  // mode only — see storage.loadHiddenCounts). The events themselves never
+  // arrive, so this count is all the client has to render the "someone has
+  // something here" hint. Empty in localStorage mode, where the client-side
+  // filter derives the hint directly instead.
+  hiddenCounts: Map<string, number>
+  refreshHiddenCounts: (fromDate: string, toDate: string) => Promise<void>
 
   // ── UI state ─────────────────────────────────────────────────────────────
   selectedDate: string | null
@@ -39,7 +59,8 @@ interface StoreState {
   activeUser: () => User | null
 
   // ── Lifecycle ────────────────────────────────────────────────────────────
-  // Must be called once on app mount (App.tsx useEffect).
+  // Must be called once on app mount (App.tsx useEffect). Loads users only —
+  // events belong to a calendar, and no calendar is open yet.
   initialize: () => Promise<void>
 
   // ── User actions ─────────────────────────────────────────────────────────
@@ -50,11 +71,17 @@ interface StoreState {
   createTestUser: (name: string) => User
   // createAuthUser: used after Supabase sign-up; id must equal auth.uid() for RLS.
   // `username` is persisted to the users.username column on first creation.
-  createAuthUser: (id: string, name: string, username?: string) => Promise<User>
+  // `avatar` is the cosmetic icon picked at signup (ADR-9) — id from AVATARS.
+  createAuthUser: (id: string, name: string, username?: string, avatar?: string) => Promise<User>
   setActiveUser:  (id: string) => void
+  // Change a user's icon. Cosmetic only — it has no bearing on their password.
+  setAvatar:      (id: string, avatar: string) => Promise<void>
 
   // ── Event actions ─────────────────────────────────────────────────────────
-  addEvent:    (event: Omit<CalEvent, 'id' | 'createdAt'>) => void
+  // calendarId is NOT a parameter: the event goes into the calendar that is
+  // open. Letting a caller name the calendar would let a UI bug write into one
+  // the user is not even looking at.
+  addEvent:    (event: Omit<CalEvent, 'id' | 'createdAt' | 'calendarId'>) => void
   updateEvent: (id: string, patch: Partial<CalEvent>) => void
   deleteEvent: (id: string) => void
 
@@ -69,13 +96,29 @@ interface StoreState {
 
 // ── Store ─────────────────────────────────────────────────────────────────────
 
+// The live realtime channel, if any. Held at module scope rather than in the
+// store because it is a resource to be torn down, not state to be rendered —
+// and because openCalendar must be able to unsubscribe the PREVIOUS calendar's
+// channel before subscribing to the next one. Leaving the old one running would
+// stream a calendar you have navigated away from into the events array.
+let liveChannel: ReturnType<typeof supabase.channel> | null = null
+
 export const useStore = create<StoreState>((set, get) => ({
-  users:        [],
-  events:       [],
-  activeUserId: storage.loadActiveUserId(),
-  selectedDate: null,
-  currentMonth: new Date(),
-  isLoading:    true,
+  users:            [],
+  events:           [],
+  activeUserId:     storage.loadActiveUserId(),
+  activeCalendarId: null,
+  hiddenCounts:     new Map(),
+  selectedDate:     null,
+  currentMonth:     new Date(),
+  isLoading:        true,
+
+  refreshHiddenCounts: async (fromDate, toDate) => {
+    const calendarId = get().activeCalendarId
+    if (!calendarId) { set({ hiddenCounts: new Map() }); return }
+    const counts = await storage.loadHiddenCounts(calendarId, fromDate, toDate)
+    set({ hiddenCounts: counts })
+  },
 
   activeUser: () => {
     const { users, activeUserId } = get()
@@ -83,80 +126,142 @@ export const useStore = create<StoreState>((set, get) => ({
   },
 
   // ── initialize ─────────────────────────────────────────────────────────────
-  // Loads data, merges URL-shared state, and sets up Realtime (Supabase only).
+  // Loads the user directory. NOT events: events belong to a calendar (ADR-12)
+  // and no calendar is open on the home view. openCalendar() loads those.
   initialize: async () => {
     set({ isLoading: true })
 
-    // Load all data from backend (errors fall back to empty arrays, not a crash).
-    const [backendUsers, backendEvents] = await Promise.all([
-      storage.loadUsers().catch(()  => [] as User[]),
-      storage.loadEvents().catch(() => [] as CalEvent[]),
-    ])
+    // Sandbox: build the fake world on first run, then never again — re-seeding
+    // on every load would discard whatever the developer just created. The users
+    // and events go through the normal storage adapter (which is localStorage
+    // here), so every read path below finds them without a special case.
+    //
+    // The `import.meta.env.DEV &&` is load-bearing, not redundant: it is what
+    // lets the bundler drop the fixture from the production build entirely.
+    // See the note in dev/devMode.ts before touching it.
+    if (import.meta.env.DEV && IS_SANDBOX) {
+      const { seedSandbox, isSeeded, SANDBOX_ME } = await import('../dev/sandboxStore')
+      if (!isSeeded()) {
+        const { users: seedUsers, events: seedEvents } = seedSandbox()
+        await Promise.all(seedUsers.map(u => storage.saveUser(u)))
+        await Promise.all(seedEvents.map(e => storage.saveEvent(e)))
+        storage.saveActiveUserId(SANDBOX_ME)
+        set({ activeUserId: SANDBOX_ME })
+      }
+    }
 
-    // Test mode: merge local-only personas (and their events) saved in this
-    // browser on top of the backend data so they persist across reloads. In
-    // pure localStorage mode loadUsers already returns them, so this is a no-op.
-    let users  = backendUsers
-    let events = backendEvents
+    const backendUsers = await storage.loadUsers().catch(() => [] as User[])
+
+    // Test mode: merge local-only personas saved in this browser on top of the
+    // backend data so they persist across reloads. In pure localStorage mode
+    // loadUsers already returns them, so this is a no-op.
+    let users = backendUsers
     if (SUPABASE_ENABLED) {
-      const localUsers  = storage.loadLocalUsers()
-      const localEvents = storage.loadLocalEvents()
-      const knownU = new Set(backendUsers.map(u => u.id))
-      const knownE = new Set(backendEvents.map(e => e.id))
-      users  = [...backendUsers,  ...localUsers.filter(u  => !knownU.has(u.id))]
-      events = [...backendEvents, ...localEvents.filter(e => !knownE.has(e.id))]
+      const known = new Set(backendUsers.map(u => u.id))
+      users = [...backendUsers, ...storage.loadLocalUsers().filter(u => !known.has(u.id))]
     }
 
-    // Additively merge any state encoded in the URL hash (#share=…).
-    // New items are persisted to the backend so they survive a reload.
-    let finalUsers  = users
-    let finalEvents = events
-    const shared = decodeStateFromUrl()
-    if (shared) {
-      const knownUsers  = new Set(users.map(u => u.id))
-      const knownEvents = new Set(events.map(e => e.id))
-      const newUsers    = shared.users.filter(u  => !knownUsers.has(u.id))
-      const newEvents   = shared.events.filter(e => !knownEvents.has(e.id))
-      finalUsers  = [...users,  ...newUsers]
-      finalEvents = [...events, ...newEvents]
-      newUsers.forEach(u  => storage.saveUser(u))
-      newEvents.forEach(e => storage.saveEvent(e))
-    }
+    set({ users, isLoading: false })
 
-    set({ users: finalUsers, events: finalEvents, isLoading: false })
-
-    // ── Supabase Realtime ───────────────────────────────────────────────────
-    // Subscribe to INSERT / UPDATE / DELETE on both tables so changes made by
-    // other users appear in this browser without a page reload.
-    // Requires the tables to be added to the supabase_realtime publication
-    // (see src/lib/schema.sql).
+    // Realtime on `users` only — it is calendar-independent (it is the directory
+    // of people, not of anyone's schedule). The events subscription is per
+    // calendar and is wired in openCalendar().
     if (!SUPABASE_ENABLED) return
 
     supabase
-      .channel('calsync-live')
-      .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'events' },
-        p => {
-          const e = p.new.data as CalEvent
-          set(s => ({ events: [...s.events.filter(x => x.id !== e.id), e] }))
-        })
-      .on('postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'events' },
-        p => {
-          const e = p.new.data as CalEvent
-          set(s => ({ events: s.events.map(x => x.id === e.id ? e : x) }))
-        })
-      .on('postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'events' },
-        p => {
-          const id = (p.old as { id: string }).id
-          set(s => ({ events: s.events.filter(x => x.id !== id) }))
-        })
+      .channel('calsync-users')
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'users' },
         p => {
           const u = p.new.data as User
           set(s => ({ users: [...s.users.filter(x => x.id !== u.id), u] }))
+        })
+      .subscribe()
+  },
+
+  // ── openCalendar ───────────────────────────────────────────────────────────
+  // Enter a calendar (or pass null to return to the home view). This is the only
+  // place `events` is populated, and it replaces the array wholesale rather than
+  // merging: the previous calendar's events must not survive the switch, or the
+  // grid would show two calendars at once — across the very boundary the privacy
+  // model is built on.
+  openCalendar: async (calendarId) => {
+    // Tear down the previous calendar's subscription FIRST. Otherwise it keeps
+    // streaming rows into `events` from a calendar the user has left.
+    if (liveChannel) {
+      supabase.removeChannel(liveChannel)
+      liveChannel = null
+    }
+
+    if (!calendarId) {
+      set({ activeCalendarId: null, events: [], hiddenCounts: new Map(), selectedDate: null })
+      return
+    }
+
+    set({ isLoading: true, activeCalendarId: calendarId, selectedDate: null })
+
+    const backendEvents = await storage.loadEvents(calendarId).catch(() => [] as CalEvent[])
+
+    let events = backendEvents
+    if (SUPABASE_ENABLED) {
+      const known = new Set(backendEvents.map(e => e.id))
+      events = [
+        ...backendEvents,
+        ...storage.loadLocalEvents(calendarId).filter(e => !known.has(e.id)),
+      ]
+    }
+
+    // Additively merge any state encoded in the URL hash (#share=…), binding the
+    // shared events into the calendar being opened — a share link carries events,
+    // which now have to land somewhere.
+    const shared = decodeStateFromUrl()
+    if (shared) {
+      const knownUsers  = new Set(get().users.map(u => u.id))
+      const knownEvents = new Set(events.map(e => e.id))
+      const newUsers    = shared.users.filter(u => !knownUsers.has(u.id))
+      const newEvents   = shared.events
+        .filter(e => !knownEvents.has(e.id))
+        .map(e => ({ ...e, calendarId }))
+      if (newUsers.length)  set(s => ({ users: [...s.users, ...newUsers] }))
+      events = [...events, ...newEvents]
+      newUsers.forEach(u  => storage.saveUser(u))
+      newEvents.forEach(e => storage.saveEvent(e))
+    }
+
+    set({ events, isLoading: false })
+
+    if (!SUPABASE_ENABLED) return
+
+    // ── Supabase Realtime, scoped to this calendar ──────────────────────────
+    // The server-side `filter` matters: without it we would receive every event
+    // row RLS lets us see, from every calendar we belong to, and have to discard
+    // most of them client-side. RLS still decides WHAT we may receive; this
+    // decides which of it we asked for.
+    const scope = `calendar_id=eq.${calendarId}`
+    liveChannel = supabase
+      .channel(`calsync-cal-${calendarId}`)
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'events', filter: scope },
+        p => {
+          const e = p.new.data as CalEvent
+          set(s => ({ events: [...s.events.filter(x => x.id !== e.id), e] }))
+        })
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'events', filter: scope },
+        p => {
+          const e = p.new.data as CalEvent
+          set(s => ({ events: s.events.map(x => x.id === e.id ? e : x) }))
+        })
+      .on('postgres_changes',
+        // DELETE carries only the OLD row's primary key — Postgres does not send
+        // the rest of it, so `filter` on calendar_id cannot match and would drop
+        // every delete. Subscribe unfiltered and reconcile by id: an id we don't
+        // hold is simply not in the array, so a delete from another calendar is a
+        // no-op rather than a leak.
+        { event: 'DELETE', schema: 'public', table: 'events' },
+        p => {
+          const id = (p.old as { id: string }).id
+          set(s => ({ events: s.events.filter(x => x.id !== id) }))
         })
       .subscribe()
   },
@@ -192,13 +297,13 @@ export const useStore = create<StoreState>((set, get) => ({
     return user
   },
 
-  // Used exclusively by AuthModal after a successful Supabase sign-up.
-  // id = auth.uid() ensures the RLS policy "auth.uid()::text = id" passes.
-  createAuthUser: async (id, name, username) => {
+  // Used by the QR claim screen and AuthModal after a successful Supabase
+  // sign-up. id = auth.uid() ensures the RLS policy "auth.uid()::text = id" passes.
+  createAuthUser: async (id, name, username, avatar) => {
     const { users } = get()
     const color = USER_COLORS[users.length % USER_COLORS.length]
     const user: User = {
-      id, name: name.trim(), color,
+      id, name: name.trim(), color, avatar,
       createdAt: new Date().toISOString(),
     }
     // Await here — the auth flow must complete before the modal closes.
@@ -213,11 +318,30 @@ export const useStore = create<StoreState>((set, get) => ({
     set({ activeUserId: id })
   },
 
+  // The avatar lives inside users.data, which RLS already lets a user rewrite
+  // for their own row — no new grant, and no credential consequence (ADR-9).
+  setAvatar: async (id, avatar) => {
+    const user = get().users.find(u => u.id === id)
+    if (!user) return
+    const updated = { ...user, avatar }
+    set(s => ({ users: s.users.map(u => (u.id === id ? updated : u)) }))
+    await storage.saveUser(updated)
+  },
+
   // ── Event actions ──────────────────────────────────────────────────────────
 
+  // The event lands in the calendar currently open — callers never pass a
+  // calendarId, so they cannot accidentally write into a different one. Without
+  // an open calendar there is nowhere for an event to go, and creating one would
+  // produce a row RLS must reject; refuse here instead of writing a doomed event.
   addEvent: (draft) => {
+    const calendarId = get().activeCalendarId
+    if (!calendarId) {
+      log.error('store', 'addEvent called with no calendar open — event discarded')
+      return
+    }
     const event: CalEvent = {
-      ...draft, id: nanoid(), createdAt: new Date().toISOString(),
+      ...draft, calendarId, id: nanoid(), createdAt: new Date().toISOString(),
     }
     set(s => ({ events: [...s.events, event] }))
     storage.saveEvent(event)
@@ -254,12 +378,21 @@ export const useStore = create<StoreState>((set, get) => ({
 
   // ── Sharing ────────────────────────────────────────────────────────────────
 
+  // Shared events are bound to the calendar currently open — a share link carries
+  // events, and an event has to belong to a calendar. With none open there is
+  // nowhere to put them.
   mergeSharedState: ({ users: su, events: se }) => {
-    const { users, events } = get()
+    const { users, events, activeCalendarId } = get()
+    if (!activeCalendarId) {
+      log.warn('store', 'mergeSharedState with no calendar open — events ignored')
+      return
+    }
     const knownUsers  = new Set(users.map(u => u.id))
     const knownEvents = new Set(events.map(e => e.id))
     const newUsers    = su.filter(u => !knownUsers.has(u.id))
-    const newEvents   = se.filter(e => !knownEvents.has(e.id))
+    const newEvents   = se
+      .filter(e => !knownEvents.has(e.id))
+      .map(e => ({ ...e, calendarId: activeCalendarId }))
     set({ users: [...users, ...newUsers], events: [...events, ...newEvents] })
     newUsers.forEach(u  => storage.saveUser(u))
     newEvents.forEach(e => storage.saveEvent(e))

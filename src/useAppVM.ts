@@ -7,14 +7,18 @@
 // "should this button show" decisions.
 
 import { useState, useEffect, useRef } from 'react'
-import type { User, CalEvent } from './types'
+import type { User, CalEvent, Calendar } from './types'
 import { useStore }                    from './store/useStore'
+import { listCalendars }               from './calendars/calendarService'
 import { useAuthSession, type AuthSession } from './auth/useAuth'
 import { copyShareUrl }                from './sharing/urlState'
 import { downloadIcal, parseIcal }     from './ical/icalUtils'
+import { visibleEvents }               from './engine/visibility'
 import { SUPABASE_ENABLED }            from './lib/supabase'
 import { MAX_ICAL_IMPORT }             from './lib/config'
 import { SITE_NAME, FEATURES, TEST_MODE } from './lib/siteConfig'
+import { readInviteCode }              from './invite/inviteLink'
+import { isAdmin as fetchIsAdmin }     from './invite/inviteService'
 
 type Theme = 'dark' | 'light'
 const THEME_KEY = 'calsync-theme'
@@ -32,10 +36,33 @@ export interface AppVM {
   isLoading:    boolean
   auth:         AuthSession
 
+  // ── Calendar routing (ADR-12) ─────────────────────────────────────────────
+  // null = the HOME view (pick a calendar). Otherwise the calendar being viewed.
+  // This is the app's only route: everything else is a modal over one of the two.
+  activeCalendarId: string | null
+  activeCalendar:   Calendar | null
+  openCalendar:     (calendarId: string) => void
+  goHome:           () => void
+  // Do I own the calendar that is open? Decides whether the Manage button is
+  // drawn. A UI convenience ONLY: every calendar RPC re-checks owns_calendar()
+  // server-side, so a user who forces this true gains nothing.
+  canAdminActive:   boolean
+  adminCalendarId:  string | null
+  openAdmin:        (calendarId: string) => void
+  closeAdmin:       () => void
+
   // Which optional UI shows (mode/feature flags).
   showStatsButton:  boolean
   showAddPersonBtn: boolean
   addPersonIsTest:  boolean       // Supabase mode + test mode → local-only persona
+
+  // Invites. `showClaimScreen` is true when the page was opened from a QR link
+  // (#invite=…); the claim screen then decides for itself whether that code is
+  // still claimable. `isAdmin` gates the mint panel — UI convenience only, the
+  // RPCs re-check server-side.
+  showClaimScreen: boolean; dismissClaimScreen: () => void
+  isAdmin:         boolean
+  showInvitePanel: boolean; setShowInvitePanel: (v: boolean) => void
 
   // Theme.
   theme:       Theme
@@ -45,10 +72,10 @@ export interface AppVM {
   selectedDate:    string | null
   clearSelected:   () => void
 
-  // Panels.
+  // Panels. (There is no share panel any more — calendar MEMBERSHIP is the
+  // sharing grant now, managed in the calendar's admin panel. See ADR-12.)
   showUserPanel:   boolean; setShowUserPanel:   (v: boolean) => void
   showAuthModal:   boolean; setShowAuthModal:   (v: boolean) => void
-  showSharePanel:  boolean; setShowSharePanel:  (v: boolean) => void
   showStatsPanel:  boolean; setShowStatsPanel:  (v: boolean) => void
 
   // Fast user-create.
@@ -73,6 +100,7 @@ export function useAppVM(): AppVM {
     setActiveUser, createUser, createTestUser, addEvent,
     isLoading, initialize,
     selectedDate, setSelectedDate,
+    activeCalendarId, openCalendar,
   } = useStore()
 
   const auth = useAuthSession()
@@ -80,18 +108,59 @@ export function useAppVM(): AppVM {
   const [newName,        setNewName]        = useState('')
   const [showUserPanel,  setShowUserPanel]  = useState(false)
   const [showAuthModal,  setShowAuthModal]  = useState(false)
-  const [showSharePanel, setShowSharePanel] = useState(false)
   const [showStatsPanel, setShowStatsPanel] = useState(false)
   const [shareCopied,    setShareCopied]    = useState(false)
   const [importFeedback, setImportFeedback] = useState<string | null>(null)
+  const [adminCalendarId, setAdminCalendarId] = useState<string | null>(null)
+  const [myCalendars,     setMyCalendars]     = useState<Calendar[]>([])
   const [theme,          setTheme]          = useState<Theme>(() =>
     (localStorage.getItem(THEME_KEY) as Theme | null) ?? 'dark')
+
+  // Read the invite code once, at mount, from the URL the user arrived on.
+  // Lazy initializer (not a plain call) so a later re-render — including the one
+  // that fires after the code is stripped from the address bar — cannot flip
+  // this back and forth mid-flow.
+  const [hasInviteLink, setHasInviteLink] = useState(() => readInviteCode() !== null)
+  const [isAdmin,         setIsAdmin]         = useState(false)
+  const [showInvitePanel, setShowInvitePanel] = useState(false)
 
   const icalInputRef = useRef<HTMLInputElement>(null)
 
   // Bootstrap: load data once, set the tab title.
   useEffect(() => { initialize() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { document.title = SITE_NAME }, [])
+
+  // Is the signed-in account an admin? Re-checked whenever the session changes,
+  // and cleared on sign-out so the panel cannot linger for the next user of the
+  // browser. Purely decides whether the button is drawn; mint/list/revoke each
+  // enforce is_admin() in Postgres.
+  useEffect(() => {
+    if (!SUPABASE_ENABLED || !auth.isAuthenticated) {
+      setIsAdmin(false)
+      setShowInvitePanel(false)
+      return
+    }
+    let cancelled = false
+    fetchIsAdmin().then(ok => { if (!cancelled) setIsAdmin(ok) })
+    return () => { cancelled = true }
+  }, [auth.isAuthenticated, auth.userId])
+
+  // The calendars I belong to. Held here (as well as in the home view's own VM)
+  // because the header needs to know whether the OPEN calendar is one I own, to
+  // decide whether to draw "Manage". Cleared on sign-out so the next user of this
+  // browser inherits nothing.
+  //
+  // Re-fetched when a calendar is opened or the admin panel closes: both are
+  // moments when membership, seats, or the pending queue may just have changed.
+  useEffect(() => {
+    if (!SUPABASE_ENABLED || !auth.isAuthenticated || !auth.approved) {
+      setMyCalendars([])
+      return
+    }
+    let cancelled = false
+    listCalendars().then(cs => { if (!cancelled) setMyCalendars(cs) })
+    return () => { cancelled = true }
+  }, [auth.isAuthenticated, auth.userId, auth.approved, activeCalendarId, adminCalendarId])
 
   // Apply theme to <html> and persist it.
   useEffect(() => {
@@ -149,13 +218,36 @@ export function useAppVM(): AppVM {
     e.target.value = ''
   }
 
+  // The calendar being viewed, as the server described it (name, seats, whether I
+  // own it). Null on the home view, and null for a beat after opening one while
+  // the list is in flight — which is why the Manage button is derived from it
+  // rather than from anything the client could assert on its own.
+  const activeCalendar =
+    myCalendars.find(c => c.id === activeCalendarId) ?? null
+
   return {
     siteName: SITE_NAME,
     users, events, activeUserId, isLoading, auth,
 
+    activeCalendarId,
+    activeCalendar,
+    openCalendar: (id: string) => { openCalendar(id) },
+    // Leaving a calendar also closes its admin panel — it belongs to that
+    // calendar, and would otherwise linger over the home view.
+    goHome: () => { setAdminCalendarId(null); openCalendar(null) },
+    canAdminActive: activeCalendar?.isOwner === true,
+    adminCalendarId,
+    openAdmin:  (id: string) => setAdminCalendarId(id),
+    closeAdmin: () => setAdminCalendarId(null),
+
     showStatsButton:  FEATURES.leaderboard || FEATURES.challenges,
     showAddPersonBtn: !SUPABASE_ENABLED || TEST_MODE,
     addPersonIsTest:  SUPABASE_ENABLED,
+
+    showClaimScreen:    hasInviteLink,
+    dismissClaimScreen: () => setHasInviteLink(false),
+    isAdmin,
+    showInvitePanel, setShowInvitePanel,
 
     theme,
     toggleTheme: () => setTheme(t => (t === 'dark' ? 'light' : 'dark')),
@@ -165,7 +257,6 @@ export function useAppVM(): AppVM {
 
     showUserPanel,  setShowUserPanel,
     showAuthModal,  setShowAuthModal,
-    showSharePanel, setShowSharePanel,
     showStatsPanel, setShowStatsPanel,
 
     newName, setNewName,
@@ -179,6 +270,8 @@ export function useAppVM(): AppVM {
     icalInputRef,
     triggerImport: () => icalInputRef.current?.click(),
     handleImportIcal,
-    exportIcal: () => downloadIcal(events, users),
+    // The .ics leaves the app, so it may carry only what this user can already
+    // see — other people's unmatched anonymous events stay out of the file.
+    exportIcal: () => downloadIcal(visibleEvents(events, activeUserId), users),
   }
 }

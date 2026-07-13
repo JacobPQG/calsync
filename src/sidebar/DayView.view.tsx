@@ -26,7 +26,7 @@ import {
 // The timeline's pixel proportions. HOUR_PX also feeds the VM (via the hook
 // argument) so the current-time marker lines up with the ruler.
 const STYLE = {
-  hourPx:      56,     // px — height of one hour row
+  hourPx:      46,     // px — height of one hour row
   labelW:      54,     // px — width of the hour-label gutter
   blockPad:    '4px 6px',
   minBlockFraction: 0.5,   // shortest event block = half an hour row
@@ -44,7 +44,7 @@ export function DayView() {
   return (
     <div className="flex flex-col h-full">
 
-      {/* ── Availability ─────────────────────────────────────────────────────── */}
+      {/* ── Event ─────────────────────────────────────────────────────── */}
       {!vm.activeEvent && (
         <div className="safe-bottom shrink-0 p-3" style={{ borderTop: '0.5px solid var(--border)' }}>
           <button
@@ -52,7 +52,7 @@ export function DayView() {
             style={{ borderColor: 'var(--border)', color: 'var(--text-2)', background: 'var(--bg-surface)' }}
             onClick={vm.openAddForm}
           >
-            + Add availability
+            + Add Event
           </button>
         </div>
       )}
@@ -63,7 +63,7 @@ export function DayView() {
       {vm.editingEvent && (
         <EventForm date={vm.editingEvent.date} existing={vm.editingEvent} onClose={vm.closeEdit} />
       )}
-      
+
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <div className="px-4 py-3 shrink-0" style={{ borderBottom: '0.5px solid var(--border)' }}>
         <div className="flex items-start justify-between gap-2">
@@ -76,6 +76,18 @@ export function DayView() {
                 style={{ background: 'var(--overlap-bg)', color: 'var(--overlap-text)' }}>
                 <span style={{ fontSize: 7 }}>●</span>
                 {vm.overlapNames}
+              </div>
+            )}
+            {/* De-identified hint: somebody has an anonymous event here that
+                nothing of yours coincides with. No name, no time, no title. */}
+            {vm.hiddenCount > 0 && (
+              <div className="inline-flex items-center gap-1.5 text-xs mt-1.5 px-2 py-0.5 rounded-full font-medium"
+                style={{ background: 'var(--bg-subtle)', color: 'var(--text-muted)' }}
+                title="Anonymous — revealed only if your times coincide">
+                <span aria-hidden style={{ fontSize: 9 }}>🕶️</span>
+                {vm.hiddenCount === 1
+                  ? 'Someone else has something here'
+                  : `${vm.hiddenCount} others have something here`}
               </div>
             )}
           </div>
@@ -237,6 +249,21 @@ function EventDetail(
           {vm.userName}
         </div>
       </div>
+
+      {/* Visibility — owner-only; tells you who can currently see this. */}
+      {vm.visibilityBadge && (
+        <Field label="Visibility">
+          <div className="rounded-lg px-3 py-2" style={{ background: 'var(--bg-subtle)', border: '0.5px solid var(--border)' }}>
+            <div className="text-sm font-medium flex items-center gap-1.5" style={{ color: 'var(--text)' }}>
+              <span aria-hidden>{vm.visibilityBadge.icon}</span>
+              {vm.visibilityBadge.label}
+            </div>
+            <p className="text-xs mt-0.5 leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              {vm.visibilityBadge.hint}
+            </p>
+          </div>
+        </Field>
+      )}
 
       {/* Activity (sports variant) */}
       {vm.activityLabel && (

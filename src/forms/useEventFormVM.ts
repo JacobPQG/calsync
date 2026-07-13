@@ -8,7 +8,8 @@
 //              (falls back to the activity's name).
 
 import { useState } from 'react'
-import type { CalEvent, RecurringRule } from '../types'
+import type { CalEvent, RecurringRule, EventVisibility } from '../types'
+import { DEFAULT_VISIBILITY } from '../types'
 import { useStore }           from '../store/useStore'
 import { urlValidationError } from '../utils/safeUrl'
 import { IS_SPORTS }          from '../lib/siteConfig'
@@ -34,6 +35,7 @@ export interface EventFormVM {
     description: string;     setDescription: (v: string) => void
     startHour: number;       setStartHour: (v: number) => void
     endHour: number;         setEndHour: (v: number) => void
+    visibility: EventVisibility; setVisibility: (v: EventVisibility) => void
     tags: string[]
     locationName: string;    setLocationName: (v: string) => void
     locationAddress: string; setLocationAddress: (v: string) => void
@@ -70,8 +72,10 @@ export function useEventFormVM(
   const [title,           setTitle]           = useState(existing?.title           ?? '')
   const [activity,        setActivity]        = useState(existing?.activity        ?? '')
   const [description,     setDescription]     = useState(existing?.description     ?? '')
-  const [startHour,       setStartHour]       = useState(existing?.startHour       ?? 9)
+  const [startHour,       setStartHourState]  = useState(existing?.startHour       ?? 9)
   const [endHour,         setEndHour]         = useState(existing?.endHour         ?? 17)
+  const [visibility,      setVisibility]      = useState<EventVisibility>(
+    existing?.visibility ?? DEFAULT_VISIBILITY)
   const [tags,            setTags]            = useState<string[]>(existing?.tags  ?? [])
   const [locationName,    setLocationName]    = useState(existing?.location?.name    ?? '')
   const [locationAddress, setLocationAddress] = useState(existing?.location?.address ?? '')
@@ -82,6 +86,13 @@ export function useEventFormVM(
   const [daysOfWeek, setDaysOfWeek] = useState<number[]>(existing?.recurring?.daysOfWeek ?? [])
   const [endDate,    setEndDate]    = useState(existing?.recurring?.endDate ?? '')
   const [customTag,  setCustomTag]  = useState('')
+
+  // Keep the end time after the start time so the field never shows a value
+  // the picker no longer offers.
+  function setStartHour(v: number) {
+    setStartHourState(v)
+    setEndHour(prev => (prev > v ? prev : Math.min(v + 0.5, 24)))
+  }
 
   function toggleTag(tag: string) {
     setTags(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag])
@@ -118,6 +129,7 @@ export function useEventFormVM(
       date:        existing?.date ?? date,
       startHour,
       endHour:     endHour > startHour ? endHour : startHour + 0.5,
+      visibility,
       location:    locationName || locationAddress || locationMapsUrl
         ? {
             name:    locationName    || undefined,
@@ -145,7 +157,8 @@ export function useEventFormVM(
     headerDate: existing?.date ?? date,
     fields: {
       title, setTitle, activity, setActivity, description, setDescription,
-      startHour, setStartHour, endHour, setEndHour, tags,
+      startHour, setStartHour, endHour, setEndHour,
+      visibility, setVisibility, tags,
       locationName, setLocationName, locationAddress, setLocationAddress,
       locationMapsUrl, setLocationMapsUrl, eventUrl, setEventUrl,
       frequency, setFrequency, daysOfWeek, endDate, setEndDate, customTag, setCustomTag,
