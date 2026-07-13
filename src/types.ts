@@ -22,6 +22,22 @@ export interface EventLocation {
   mapsUrl?: string
 }
 
+// ── Sports variant (see lib/siteConfig.ts) ────────────────────────────────────
+// A result recorded against an event: 2+ sides with members and a score.
+// It lives inside the event's JSON payload, so it needs no extra table and is
+// visible to exactly the people who can see the event (RLS-enforced).
+
+export interface TeamScore {
+  name: string            // display name ("Team A" by default)
+  memberIds: string[]     // participating user ids
+  score: number
+}
+
+export interface MatchResult {
+  teams: TeamScore[]      // 2+ sides; highest score wins, equal = draw
+  recordedAt: string
+}
+
 export interface CalEvent {
   id: string
   userId: string
@@ -35,6 +51,8 @@ export interface CalEvent {
   eventUrl?: string       // link to external event page
   recurring: RecurringRule
   color?: string          // override user color if desired
+  activity?: string       // sports variant: id from sports/activities.ts
+  result?: MatchResult    // sports variant: recorded score
   createdAt: string
 }
 

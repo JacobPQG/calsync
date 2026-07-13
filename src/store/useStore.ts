@@ -45,8 +45,12 @@ interface StoreState {
   // ── User actions ─────────────────────────────────────────────────────────
   // createUser: assigns a random color + nanoid; used for local (non-auth) users.
   createUser:     (name: string) => User
+  // createTestUser: like createUser but always persists to localStorage even in
+  // Supabase mode. Test-mode only (fast create) — never writes to the backend.
+  createTestUser: (name: string) => User
   // createAuthUser: used after Supabase sign-up; id must equal auth.uid() for RLS.
-  createAuthUser: (id: string, name: string) => Promise<User>
+  // `username` is persisted to the users.username column on first creation.
+  createAuthUser: (id: string, name: string, username?: string) => Promise<User>
   setActiveUser:  (id: string) => void
 
   // ── Event actions ─────────────────────────────────────────────────────────
@@ -84,10 +88,24 @@ export const useStore = create<StoreState>((set, get) => ({
     set({ isLoading: true })
 
     // Load all data from backend (errors fall back to empty arrays, not a crash).
-    const [users, events] = await Promise.all([
+    const [backendUsers, backendEvents] = await Promise.all([
       storage.loadUsers().catch(()  => [] as User[]),
       storage.loadEvents().catch(() => [] as CalEvent[]),
     ])
+
+    // Test mode: merge local-only personas (and their events) saved in this
+    // browser on top of the backend data so they persist across reloads. In
+    // pure localStorage mode loadUsers already returns them, so this is a no-op.
+    let users  = backendUsers
+    let events = backendEvents
+    if (SUPABASE_ENABLED) {
+      const localUsers  = storage.loadLocalUsers()
+      const localEvents = storage.loadLocalEvents()
+      const knownU = new Set(backendUsers.map(u => u.id))
+      const knownE = new Set(backendEvents.map(e => e.id))
+      users  = [...backendUsers,  ...localUsers.filter(u  => !knownU.has(u.id))]
+      events = [...backendEvents, ...localEvents.filter(e => !knownE.has(e.id))]
+    }
 
     // Additively merge any state encoded in the URL hash (#share=…).
     // New items are persisted to the backend so they survive a reload.
@@ -159,9 +177,24 @@ export const useStore = create<StoreState>((set, get) => ({
     return user
   },
 
+  // Fast create (test mode): a name-only persona kept in localStorage even when
+  // a Supabase backend is configured, so it never touches the real database.
+  createTestUser: (name) => {
+    const { users } = get()
+    const color = USER_COLORS[users.length % USER_COLORS.length]
+    const user: User = {
+      id: nanoid(), name: name.trim(), color,
+      createdAt: new Date().toISOString(),
+    }
+    set({ users: [...users, user], activeUserId: user.id })
+    storage.saveActiveUserId(user.id)
+    storage.saveLocalUser(user)
+    return user
+  },
+
   // Used exclusively by AuthModal after a successful Supabase sign-up.
   // id = auth.uid() ensures the RLS policy "auth.uid()::text = id" passes.
-  createAuthUser: async (id, name) => {
+  createAuthUser: async (id, name, username) => {
     const { users } = get()
     const color = USER_COLORS[users.length % USER_COLORS.length]
     const user: User = {
@@ -169,7 +202,7 @@ export const useStore = create<StoreState>((set, get) => ({
       createdAt: new Date().toISOString(),
     }
     // Await here — the auth flow must complete before the modal closes.
-    await storage.saveUser(user)
+    await storage.saveUser(user, username)
     storage.saveActiveUserId(id)
     set({ users: [...users, user], activeUserId: id })
     return user

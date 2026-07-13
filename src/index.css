@@ -33,6 +33,13 @@
   --overlap-border: #1a4a27;
   --overlap-text:   #4ade80;
 
+  --danger:         #f87171;
+  --danger-bg:      #2a1414;
+  --danger-border:  #7f1d1d;
+
+  --warning:        #fbbf24;
+  --warning-bg:     #271d07;
+
   --shadow-xs: 0 1px 2px rgba(0,0,0,.25);
   --shadow-sm: 0 1px 3px rgba(0,0,0,.35), 0 1px 2px rgba(0,0,0,.2);
   --shadow-md: 0 4px 8px rgba(0,0,0,.4),  0 2px 4px rgba(0,0,0,.25);
@@ -65,6 +72,13 @@
   --overlap-border: #a7f3d0;
   --overlap-text:   #166534;
 
+  --danger:         #dc2626;
+  --danger-bg:      #fff5f5;
+  --danger-border:  #fca5a5;
+
+  --warning:        #92400e;
+  --warning-bg:     #fef3c7;
+
   --shadow-xs: 0 1px 2px rgba(0,0,0,.05);
   --shadow-sm: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.05);
   --shadow-md: 0 4px 8px rgba(0,0,0,.09), 0 2px 4px rgba(0,0,0,.06);
@@ -88,6 +102,33 @@ html, body, #root {
 
 *, *::before, *::after { box-sizing: border-box; }
 
+/* ─── Mobile ──────────────────────────────────────────────────────────────────
+   .app-shell replaces Tailwind's h-screen on the root: 100dvh tracks the real
+   visible height on phones (iOS/Android collapse the URL bar, so 100vh
+   overflows and hides the bottom of the layout). env() insets keep content
+   clear of notches / home indicators (viewport-fit=cover in index.html). */
+.app-shell {
+  height: 100vh;   /* fallback for browsers without dvh */
+  height: 100dvh;
+  padding-top:   env(safe-area-inset-top);
+  padding-left:  env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+
+/* iOS Safari zooms the page when a focused input has font-size < 16px.
+   On small screens promote all form fields to 16px to keep the layout put. */
+@media (max-width: 640px) {
+  .field-input { font-size: 16px; }
+}
+
+/* Comfortable touch targets on touch-primary devices (Apple HIG ≈ 44px). */
+@media (pointer: coarse) {
+  .btn-nav     { width: 38px; height: 38px; }
+  .btn-toolbar { padding: 8px 12px; font-size: 12.5px; }
+  .day-cell    { min-height: 62px; }
+}
+
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
 /* Thin, unobtrusive scrollbars */
@@ -101,11 +142,18 @@ html, body, #root {
 @layer components {
 
   /* ── Calendar day cell ──────────────────────────────────────────────────── */
+  /* Rendered as a <button> for keyboard access — reset button chrome here. */
   .day-cell {
     position: relative;
+    display: block;
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    color: inherit;
     border: 0.5px solid var(--border);
     border-radius: 7px;
-    padding: 5px 5px 4px;
+    padding: 5px 4px 4px;
+    min-height: 56px;
     cursor: pointer;
     transition: border-color .12s, background .12s, box-shadow .12s;
     background: var(--bg-surface);
@@ -132,6 +180,14 @@ html, body, #root {
     margin-top: 2px; overflow: hidden; white-space: nowrap;
   }
   .event-chip-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+
+  /* ── Modal card ─────────────────────────────────────────────────────────── */
+  /* Shared max-height for centered/bottom-sheet modals: dvh tracks the real
+     visible height on phones (vh is the fallback for older browsers). */
+  .modal-card {
+    max-height: 88vh;
+    max-height: 88dvh;
+  }
 
   /* ── Form fields ────────────────────────────────────────────────────────── */
   .field-label {
@@ -185,4 +241,13 @@ html, body, #root {
   .text-muted     { color: var(--text-muted); }
   .bg-surface     { background: var(--bg-surface); }
   .border-divider { border-color: var(--border); }
+}
+
+/* ── Keyboard focus ────────────────────────────────────────────────────────────
+   A single, consistent focus ring for every interactive element. Only shows
+   for keyboard navigation (:focus-visible), never on mouse clicks. */
+:where(button, a, input, select, textarea, [role="button"]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 6px;
 }
