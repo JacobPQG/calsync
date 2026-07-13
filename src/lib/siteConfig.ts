@@ -28,5 +28,3 @@ export const SITE_NAME: string =
 // never expose it even if the var leaks into a build environment.
 export const TEST_MODE: boolean =
   import.meta.env.DEV && import.meta.env.VITE_TEST_MODE === 'true'
-</content>
-</invoke>
