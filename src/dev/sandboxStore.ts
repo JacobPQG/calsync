@@ -19,7 +19,7 @@
 // RLS here and no server to refuse anything: every check is a client-side `if`,
 // which a client could trivially skip. That is acceptable precisely BECAUSE there
 // is no shared data to protect — everything lives in one browser's localStorage
-// and belongs to the person sitting at it. The real rules live in lib/schema.sql
+// and belongs to the person sitting at it. The real rules live in db/schema/
 // and are exercised in live mode. Nothing in this file is evidence that they work.
 
 import { nanoid } from 'nanoid'

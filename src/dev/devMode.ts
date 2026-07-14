@@ -13,7 +13,7 @@
 // -------------------------------------------------
 // There is no client-side way to "pretend to be approved" against a real
 // Supabase project. Approval, ownership and event visibility are enforced by RLS
-// and SECURITY DEFINER functions in Postgres (see lib/schema.sql); the browser is
+// and SECURITY DEFINER functions in Postgres (see db/schema/); the browser is
 // not a policy enforcement point and cannot overrule them. A flag that merely
 // made the client BELIEVE it was approved would draw every button and then have
 // every RPC refused by the server — worse than useless, because it would look

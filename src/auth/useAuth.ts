@@ -11,7 +11,7 @@
 // Sign-up is invite-gated and now happens through the QR claim screen
 // (invite/ClaimScreen): the code is validated, the account created, and the code
 // redeemed — atomically single-use, so the same QR can never make a second
-// account. See ADR-9 / ADR-10 and lib/schema.sql.
+// account. See ADR-9 / ADR-10 and db/schema/50_invites.sql.
 
 import { useState, useEffect, useCallback } from 'react'
 import type { User as SupabaseUser } from '@supabase/supabase-js'

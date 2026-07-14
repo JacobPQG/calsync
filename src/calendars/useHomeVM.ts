@@ -6,7 +6,7 @@
 // server decides which is which, from the `owner_id` on the calendar itself. The
 // split is presentational; the authority is not.
 //
-// All security lives in lib/schema.sql. This VM only renders what the server
+// All security lives in db/schema/. This VM only renders what the server
 // already decided the user may see.
 
 import { useState, useEffect, useCallback } from 'react'

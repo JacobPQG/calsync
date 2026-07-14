@@ -149,7 +149,7 @@ export async function removeUser(id: string): Promise<void> {
 // members of that calendar that you are permitted to see (public, or an anonymous
 // one something of yours coincides with). Unmatched anonymous events never reach
 // the client at all. Asking for a calendar you are not a member of returns zero
-// rows — not an error, and not anyone's data. See lib/schema.sql.
+// rows — not an error, and not anyone's data. See db/schema/70_policies.sql.
 export async function loadEvents(calendarId: string): Promise<CalEvent[]> {
   if (!SUPABASE_ENABLED) {
     return lsRead<CalEvent[]>(LS.events, []).filter(e => e.calendarId === calendarId)

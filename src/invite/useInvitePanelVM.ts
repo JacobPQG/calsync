@@ -8,7 +8,7 @@
 //      opening the Supabase Dashboard. That is the confirmation step.
 //
 // Everything here is gated server-side by is_admin() inside the RPCs
-// (lib/schema.sql). The `isAdmin` flag in useAppVM only decides whether to draw
+// (db/schema/50_invites.sql). The `isAdmin` flag in useAppVM only decides whether to draw
 // the panel — it is not a security boundary and must never be treated as one.
 
 import { useState, useEffect, useCallback } from 'react'

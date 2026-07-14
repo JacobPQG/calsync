@@ -59,7 +59,7 @@ export const MAX_ICAL_IMPORT = 200
 export const DEFAULT_CALENDAR_SEATS: number =
   Number(import.meta.env.VITE_DEFAULT_CALENDAR_SEATS) || 8
 
-// Bounds on the seat cap, mirroring the CHECK constraint in schema.sql. Client
+// Bounds on the seat cap, mirroring the CHECK constraint in db/schema/10_tables.sql. Client
 // bounds are a courtesy that gives an instant error message; the server is the
 // enforcement point, and these two must agree or the UI will offer numbers the
 // database then rejects.

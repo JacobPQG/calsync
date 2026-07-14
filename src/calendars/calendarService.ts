@@ -5,7 +5,7 @@
 // friendly error string, never a PostgrestError and never raw SQL state.
 //
 // Every function here is a thin wrapper over a SECURITY DEFINER function in
-// lib/schema.sql. The security lives THERE — who owns a calendar, who may
+// db/schema/40_calendars.sql. The security lives THERE — who owns a calendar, who may
 // approve a member, and the seat cap. This file must not re-implement any of it,
 // and must not be trusted to: a browser is not a policy enforcement point.
 //

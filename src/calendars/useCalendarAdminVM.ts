@@ -9,7 +9,7 @@
 //   4. ROSTER    — who is in, who is waiting, and removing people.
 //
 // Everything here is gated server-side by owns_calendar() inside the RPCs
-// (lib/schema.sql). Whether this panel is drawn at all is a UI decision made from
+// (db/schema/40_calendars.sql). Whether this panel is drawn at all is a UI decision made from
 // `isOwner` — that is not a security boundary and must never be treated as one.
 
 import { useState, useEffect, useCallback } from 'react'

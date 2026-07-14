@@ -114,6 +114,18 @@ interface StoreState {
 // stream a calendar you have navigated away from into the events array.
 let liveChannel: ReturnType<typeof supabase.channel> | null = null
 
+// The `users` directory channel. Module-level and created at most once, for the
+// same reason liveChannel is module-level — it is a resource, not state.
+//
+// initialize() runs TWICE in development: React StrictMode deliberately mounts,
+// unmounts and remounts every component to surface exactly this class of bug. A
+// supabase-js channel may only be configured BEFORE it is subscribed, so the
+// second run calling .on() on the already-subscribed 'calsync-users' channel
+// throws "cannot add `postgres_changes` callbacks ... after `subscribe()`".
+// Guarding on the handle means the second run finds the channel already live and
+// leaves it alone.
+let usersChannel: ReturnType<typeof supabase.channel> | null = null
+
 export const useStore = create<StoreState>((set, get) => ({
   users:            [],
   events:           [],
@@ -180,9 +192,9 @@ export const useStore = create<StoreState>((set, get) => ({
     // Realtime on `users` only — it is calendar-independent (it is the directory
     // of people, not of anyone's schedule). The events subscription is per
     // calendar and is wired in openCalendar().
-    if (!SUPABASE_ENABLED) return
+    if (!SUPABASE_ENABLED || usersChannel) return
 
-    supabase
+    usersChannel = supabase
       .channel('calsync-users')
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'users' },
