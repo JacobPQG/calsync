@@ -6,11 +6,19 @@
 // Domain used to build synthetic account emails (<username>@<domain>).
 // These addresses are never mailed; they only exist because Supabase Auth
 // keys accounts by email. Use a domain you control (or the default).
+//
+// NOT a .invalid / .test / .example TLD: those are RFC 2606 reserved and
+// Supabase Auth rejects them at signup ("Email address is invalid"). The
+// address must merely LOOK deliverable — it never has to be.
 export const ACCOUNT_EMAIL_DOMAIN: string =
-  (import.meta.env.VITE_ACCOUNT_DOMAIN as string | undefined) ?? 'calsync.invalid'
+  (import.meta.env.VITE_ACCOUNT_DOMAIN as string | undefined) ?? 'calsync.local'
 
 // Username rules: 2–20 chars, lowercase letters / digits / hyphen,
 // must start alphanumeric. Keep in sync with the signup form hint.
+//
+// These apply ONLY to usernames — an identifier with no "@". A real email
+// address is taken as typed and validated by Supabase, not by this pattern
+// (see isEmailAddress / toAccountEmail in auth/credentials.ts).
 export const USERNAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,19}$/
 
 // Minimum password length. Raised from the old 8-char "secret word" because the

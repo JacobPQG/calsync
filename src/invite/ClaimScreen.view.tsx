@@ -96,12 +96,15 @@ function ClaimForm({ vm }: { vm: ReturnType<typeof useClaimScreenVM> }) {
       )}
 
       <div>
-        <label className="field-label" htmlFor="claim-username">Username</label>
+        <label className="field-label" htmlFor="claim-username">Username or email</label>
+        {/* No maxLength: it would silently truncate an email address as it is
+            typed. Length is validated on submit, per identifier kind. */}
         <input id="claim-username" name="username" type="text" className="field-input"
           value={vm.username} onChange={e => vm.setUsername(e.target.value)}
-          autoComplete="username" maxLength={20} required />
+          autoComplete="username" required />
         <p className="text-xs mt-1.5" style={{ color: 'var(--text-muted)' }}>
-          Filled in from your invite — change it if you like.
+          Filled in from your invite — change it if you like. No email is needed;
+          use one only if you would rather sign in with it.
         </p>
       </div>
 
@@ -197,10 +200,10 @@ function ClaimedScreen({ onDone }: { onDone: () => void }) {
       </p>
 
       <div>
-        <label className="field-label" htmlFor="claimed-username">Username</label>
+        <label className="field-label" htmlFor="claimed-username">Username or email</label>
         <input id="claimed-username" name="username" type="text" className="field-input"
           value={vm.username} onChange={e => vm.setUsername(e.target.value)}
-          autoComplete="username" maxLength={20} required autoFocus />
+          autoComplete="username" required autoFocus />
       </div>
 
       <div>

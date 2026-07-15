@@ -1,13 +1,21 @@
 // ─── Credential derivation ────────────────────────────────────────────────────
-// CalSync accounts are anonymous: no email, no phone, no real name. A login is
+// CalSync accounts are anonymous by default: no email, no phone, no real name.
+// A login is
 //
-//     username  +  password
+//     identifier  +  password
 //
-// Under the hood we still use Supabase Auth (bcrypt-hashed passwords, built-in
-// brute-force rate limiting) by deriving a synthetic address:
+// where the identifier is EITHER a username OR, if the user prefers, their own
+// email address. An email is never required — it is an option, not a step.
 //
-//     email    = <username>@<ACCOUNT_EMAIL_DOMAIN>      (never mailed)
-//     password = the password, as typed
+// Under the hood we always use Supabase Auth (bcrypt-hashed passwords, built-in
+// brute-force rate limiting), which keys accounts by email. So:
+//
+//     "jake"           → email = jake@<ACCOUNT_EMAIL_DOMAIN>   (synthetic, never mailed)
+//     "jake@gmail.com" → email = jake@gmail.com                (as typed)
+//     password         = the password, as typed
+//
+// Only the username branch is constrained (it has to be splice-safe into an
+// address). A real email is taken verbatim — see toAccountEmail.
 //
 // ── Why the password is now just the password (ADR-9) ────────────────────────
 // It used to be `<secret word>:<image id>` — the "memory image" was a genuine
@@ -65,10 +73,36 @@ export function avatarEmoji(id: string | undefined): string | null {
   return id ? AVATAR_BY_ID.get(id)?.emoji ?? null : null
 }
 
+// ── Identifiers: username OR email ────────────────────────────────────────────
+// An account is identified by ONE field, and the user decides what to put in it:
+//
+//   "jake"              → a username. Synthesized into jake@<ACCOUNT_EMAIL_DOMAIN>.
+//   "jake@gmail.com"    → a real email. Used verbatim.
+//
+// An email is never REQUIRED — the anonymous username path is the default and is
+// unchanged. But someone who would rather sign in with their own address may,
+// and if they do we take it AS TYPED: no character rules, no length cap, no
+// hyphens-only. Supabase does the RFC validation; re-implementing it here would
+// only reject addresses that are in fact deliverable.
+//
+// The discriminator is deliberately just "@": it is the one character that
+// cannot appear in a username, so the two spaces cannot collide.
+
+export function isEmailAddress(identifier: string): boolean {
+  return identifier.includes('@')
+}
+
 // ── Normalization ─────────────────────────────────────────────────────────────
 
 export function normalizeUsername(name: string): string {
   return name.normalize('NFKC').trim().toLowerCase()
+}
+
+// Emails are lower-cased and trimmed for stable lookup (Supabase stores them
+// folded, so "Jake@X.com" and "jake@x.com" must key the same account) — but the
+// address is otherwise UNTOUCHED. Dots, plus-tags, sub-domains all survive.
+export function normalizeEmail(email: string): string {
+  return email.normalize('NFKC').trim().toLowerCase()
 }
 
 // Passwords are NOT normalized — they are compared byte-for-byte by bcrypt, and
@@ -76,6 +110,19 @@ export function normalizeUsername(name: string): string {
 // (The legacy secret word WAS normalized; legacyPassword preserves that.)
 
 // ── Validation (returns a human-readable error or null) ──────────────────────
+
+// Validate whichever kind of identifier this is. The username rules apply ONLY
+// to usernames: an email is the user's own address and is not ours to police,
+// so we check only that it is non-empty and has something either side of the @.
+export function identifierError(identifier: string): string | null {
+  if (isEmailAddress(identifier)) {
+    const email = normalizeEmail(identifier)
+    const [local, domain, ...rest] = email.split('@')
+    if (rest.length > 0 || !local || !domain) return 'Enter a valid email address.'
+    return null
+  }
+  return usernameError(identifier)
+}
 
 export function usernameError(name: string): string | null {
   if (!USERNAME_PATTERN.test(normalizeUsername(name))) {
@@ -93,8 +140,21 @@ export function passwordError(password: string): string | null {
 
 // ── Derivation ────────────────────────────────────────────────────────────────
 
-export function toAccountEmail(username: string): string {
-  return `${normalizeUsername(username)}@${ACCOUNT_EMAIL_DOMAIN}`
+// The address Supabase Auth keys the account by. A real email is passed straight
+// through; a username is turned into a synthetic address that is never mailed.
+export function toAccountEmail(identifier: string): string {
+  if (isEmailAddress(identifier)) return normalizeEmail(identifier)
+  return `${normalizeUsername(identifier)}@${ACCOUNT_EMAIL_DOMAIN}`
+}
+
+// The handle to store in users.username and show in the UI. For a username that
+// is the name itself; for an email it is the local part ("jake@gmail.com" →
+// "jake"), so the address is never rendered next to someone's events — the
+// account stays as anonymous to other members as a username-only one.
+export function toDisplayHandle(identifier: string): string {
+  return isEmailAddress(identifier)
+    ? normalizeEmail(identifier).split('@')[0]
+    : normalizeUsername(identifier)
 }
 
 // ── Legacy (pre-ADR-9) credential scheme ──────────────────────────────────────

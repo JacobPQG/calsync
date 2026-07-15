@@ -1,5 +1,7 @@
 // ─── AuthModal ViewModel ──────────────────────────────────────────────────────
-// State + submit orchestration for the sign-in modal (username + password).
+// State + submit orchestration for the sign-in modal (identifier + password).
+// The identifier is whatever the account was created with — a username or an
+// email address; credentials.ts decides which and derives the auth email.
 //
 // SIGN-UP LIVES ELSEWHERE. Accounts are created only by claiming a QR invite
 // (invite/ClaimScreen) — that is what makes an invite one-shot and lets it carry
@@ -18,7 +20,7 @@ import { useState } from 'react'
 import { useAuthSession }      from './useAuth'
 import { useStore }            from '../store/useStore'
 import { supabase, SUPABASE_ENABLED } from '../lib/supabase'
-import { usernameError, normalizeUsername } from './credentials'
+import { identifierError, toDisplayHandle } from './credentials'
 
 export interface AuthModalVM {
   // Bound fields.
@@ -49,7 +51,7 @@ export function useAuthModalVM(onClose: () => void): AuthModalVM {
     e.preventDefault()
     setError(null)
 
-    const uErr = usernameError(username)
+    const uErr = identifierError(username)
     if (uErr) { setError(uErr); return }
     if (password.length === 0) { setError('Enter your password.'); return }
 
@@ -72,7 +74,7 @@ export function useAuthModalVM(onClose: () => void): AuthModalVM {
       // The profile row is created when the invite is claimed. If it is missing,
       // this is a pre-existing account whose row never landed — recreate it
       // rather than leaving the user with no identity in the UI.
-      const name = normalizeUsername(username)
+      const name = toDisplayHandle(username)
       if (!store.users.some(u => u.id === uid)) await store.createAuthUser(uid, name, name)
       else                                      store.setActiveUser(uid)
 

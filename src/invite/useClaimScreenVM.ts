@@ -18,7 +18,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useAuthSession }  from '../auth/useAuth'
 import { useStore }        from '../store/useStore'
 import { supabase, SUPABASE_ENABLED } from '../lib/supabase'
-import { usernameError, passwordError, normalizeUsername } from '../auth/credentials'
+import { identifierError, passwordError, normalizeUsername, toDisplayHandle } from '../auth/credentials'
 import { lookupInvite, redeemInvite, type InviteStatus } from './inviteService'
 import { readInviteCode, clearInviteFromUrl } from './inviteLink'
 import { log } from '../lib/log'
@@ -130,7 +130,7 @@ export function useClaimScreenVM(onClose: () => void): ClaimScreenVM {
 
     if (!code) { setError('This invite link is malformed.'); return }
     if (!avatarId) { setError('Pick an icon.'); return }
-    const uErr = usernameError(username); if (uErr) { setError(uErr); return }
+    const uErr = identifierError(username); if (uErr) { setError(uErr); return }
     const pErr = passwordError(password); if (pErr) { setError(pErr); return }
 
     setSubmitting(true)
@@ -143,8 +143,13 @@ export function useClaimScreenVM(onClose: () => void): ClaimScreenVM {
 
       // Profile row: display name is the name the admin gave (it's what other
       // people will recognise), with the chosen avatar as the icon.
-      const name = inviteeName?.trim() || normalizeUsername(username)
-      await store.createAuthUser(userId, name, normalizeUsername(username), avatarId)
+      //
+      // The stored handle is toDisplayHandle(), NOT the raw identifier: if the
+      // user signed up with an email, only its local part is kept. Their address
+      // is a credential, and must never end up rendered beside their events.
+      const handle = toDisplayHandle(username)
+      const name   = inviteeName?.trim() || handle
+      await store.createAuthUser(userId, name, handle, avatarId)
 
       // The code is spent now. Drop it from the URL so a refresh — or a
       // screenshot of this very page — cannot reopen the claim flow.

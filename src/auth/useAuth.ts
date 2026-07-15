@@ -17,7 +17,7 @@ import { useState, useEffect, useCallback } from 'react'
 import type { User as SupabaseUser } from '@supabase/supabase-js'
 import { supabase, SUPABASE_ENABLED } from '../lib/supabase'
 import { log } from '../lib/log'
-import { toAccountEmail, legacyPassword } from './credentials'
+import { toAccountEmail, toDisplayHandle, legacyPassword } from './credentials'
 
 export interface SignUpInput {
   inviteCode: string
@@ -29,9 +29,12 @@ export interface AuthSession {
   isAuthenticated: boolean
   isLoading:       boolean            // true during initial session check
   userId:          string | null      // Supabase auth.uid() — doubles as CalSync user id
-  username:        string | null      // derived from the synthetic email
+  username:        string | null      // handle only — never a full email address
   approved:        boolean | null     // null = unknown / not signed in
 
+  // `username` here is the IDENTIFIER as typed: a username, or an email address
+  // if the account was created with one. credentials.ts derives the auth email.
+  //
   // Returns null on success, or a human-readable error message.
   // `legacyImageId` is only for pre-ADR-9 accounts whose password was
   // `word:image`; the sign-in form offers it as an optional fallback.
@@ -44,17 +47,22 @@ export interface AuthSession {
   refreshApproval: () => Promise<void>
 }
 
-// Map raw Supabase auth errors to messages that make sense for a
-// username+word scheme (the user never sees the synthetic email).
+// Map raw Supabase auth errors to messages that make sense for an
+// identifier+password scheme (a username user never sees the synthetic email).
 function friendlyAuthError(raw: string): string {
   if (/invalid login credentials/i.test(raw)) {
-    return 'Wrong username, secret word, or image.'
+    return 'Wrong username or password.'
   }
   if (/already registered/i.test(raw)) {
     return 'That username is already taken.'
   }
   if (/rate limit|too many/i.test(raw)) {
     return 'Too many attempts — wait a minute and try again.'
+  }
+  // Supabase rejects reserved-TLD domains (.invalid/.test/.example). If this
+  // fires for a username signup, VITE_ACCOUNT_DOMAIN is set to one of them.
+  if (/email address.*invalid|invalid.*email/i.test(raw)) {
+    return 'That address was rejected. If you entered an email, check it; otherwise VITE_ACCOUNT_DOMAIN is not a usable domain.'
   }
   return raw
 }
@@ -191,7 +199,7 @@ export function useAuthSession(): AuthSession {
     isAuthenticated: !!user,
     isLoading:       authLoading,
     userId:          user?.id ?? null,
-    username:        user?.email?.split('@')[0] ?? null,
+    username:        user?.email ? toDisplayHandle(user.email) : null,
     approved,
     signIn,
     signUp,

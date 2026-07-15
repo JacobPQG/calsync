@@ -1,9 +1,11 @@
 // ─── AuthModal View ───────────────────────────────────────────────────────────
 // PURE VIEW. State/submit is in useAuthModalVM.ts. Reshape freely here.
 //
-// SIGN-IN ONLY: username + password. Accounts are created by claiming a QR
-// invite (invite/ClaimScreen), so there is no sign-up tab and no invite-code
-// field here — an invite is a link you follow, not a code you retype.
+// SIGN-IN ONLY: identifier + password, where the identifier is whatever the
+// account was made with — a username, or an email if the user chose one.
+// Accounts are created by claiming a QR invite (invite/ClaimScreen), so there is
+// no sign-up tab and no invite-code field here — an invite is a link you follow,
+// not a code you retype.
 //
 // Password managers: the <form> holds both a `username` and a
 // `current-password` field, which is what lets the browser/phone offer to fill
@@ -49,11 +51,13 @@ export function AuthModal({ onClose }: Props) {
         <form onSubmit={vm.submit} className="p-5 space-y-4">
 
           <div>
-            <label className="field-label" htmlFor="auth-username">Username</label>
+            <label className="field-label" htmlFor="auth-username">Username or email</label>
+            {/* No maxLength: it would silently truncate an email address as it
+                is typed. Length is validated on submit, per identifier kind. */}
             <input id="auth-username" name="username" type="text" className="field-input"
               placeholder="e.g. bluejay"
               value={vm.username} onChange={e => vm.setUsername(e.target.value)}
-              autoComplete="username" maxLength={20} required autoFocus />
+              autoComplete="username" required autoFocus />
           </div>
 
           <div>
