@@ -26,7 +26,8 @@ import {
 // The timeline's pixel proportions. HOUR_PX also feeds the VM (via the hook
 // argument) so the current-time marker lines up with the ruler.
 const STYLE = {
-  hourPx:      46,     // px — height of one hour row
+  hourPx:      40,     // px — height of one hour row (compact: the panel floats
+                       //      inset from the screen edges, so rows earn less room)
   labelW:      54,     // px — width of the hour-label gutter
   blockPad:    '4px 6px',
   minBlockFraction: 0.5,   // shortest event block = half an hour row
@@ -44,22 +45,6 @@ export function DayView() {
   return (
     <div className="flex flex-col h-full">
 
-      {/* ── Event ─────────────────────────────────────────────────────── */}
-      {!vm.activeEvent && (
-        <div className="safe-bottom shrink-0 p-3" style={{ borderTop: '0.5px solid var(--border)' }}>
-          <button
-            className="w-full text-sm py-2 rounded-lg border font-medium transition-colors"
-            style={{ borderColor: 'var(--border)', color: 'var(--text-2)', background: 'var(--bg-surface)' }}
-            onClick={vm.openAddForm}
-          >
-            + Add Event
-          </button>
-        </div>
-      )}
-
-      {vm.showAddForm && vm.selectedDate && (
-        <EventForm date={vm.selectedDate} onClose={vm.closeAddForm} />
-      )}
       {vm.editingEvent && (
         <EventForm date={vm.editingEvent.date} existing={vm.editingEvent} onClose={vm.closeEdit} />
       )}
@@ -102,14 +87,14 @@ export function DayView() {
       </div>
 
       {/* ── Content: detail (state 3) or timeline (state 2) ─────────────── */}
+      {/* Adding events and polls happens in the actions panel below the month
+          grid (MonthGrid.view.tsx) — this panel is a pure timeline. */}
       <div className="flex-1 overflow-y-auto">
         {vm.activeEvent
           ? <EventDetail instance={vm.activeEvent} onDelete={vm.deleteActiveEvent} onEdit={vm.openEdit} />
           : <HourTimeline instances={vm.instances} isToday={vm.isToday} onClickEvent={vm.openEvent} />
         }
       </div>
-
-      
     </div>
   )
 }
@@ -317,6 +302,26 @@ function EventDetail(
               {vm.hasResult ? 'Edit result' : '🏆 Record result'}
             </button>
           )}
+        </Field>
+      )}
+
+      {/* Source calendar — with the jump to it when it is not the view you are
+          already in (i.e. from the overview). */}
+      {(vm.sourceCalendarName || vm.canSwitchToSource) && (
+        <Field label="Calendar">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-medium" style={{ color: 'var(--text)' }}>
+              {vm.sourceCalendarName ?? 'Unknown calendar'}
+            </span>
+            {vm.canSwitchToSource && (
+              <button onClick={vm.openSourceCalendar}
+                className="text-xs px-2.5 py-1 rounded border font-medium transition-colors"
+                style={{ borderColor: 'var(--border)', color: 'var(--text-2)', background: 'var(--bg-subtle)' }}
+                title={`Open ${vm.sourceCalendarName ?? 'this event’s calendar'}`}>
+                ↗ Open calendar
+              </button>
+            )}
+          </div>
         </Field>
       )}
 

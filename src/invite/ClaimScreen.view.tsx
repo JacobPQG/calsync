@@ -47,11 +47,13 @@ export function ClaimScreen({ onClose }: Props) {
           <h2 className="flex-1 font-semibold text-sm" style={{ color: 'var(--text)' }}>
             {/* A calendar invite names the calendar; a site invite names the site. */}
             {vm.phase === 'open'    && (vm.calendarName
-              ? `You're invited to ${vm.calendarName}`
+              ? (vm.isGuestLink ? `Join ${vm.calendarName}` : `You're invited to ${vm.calendarName}`)
               : `You're invited to ${SITE_NAME}`)}
             {vm.phase === 'claimed' && `Sign in to ${SITE_NAME}`}
             {vm.phase === 'expired' && 'Invite expired'}
-            {vm.phase === 'done'    && (vm.joinOnly ? 'Request sent' : 'Account created')}
+            {vm.phase === 'done'    && (
+              vm.isGuestLink ? 'You’re in' :
+              vm.joinOnly    ? 'Request sent'   : 'Account created')}
             {(vm.phase === 'invalid' || vm.phase === 'unavailable' || vm.phase === 'loading') && SITE_NAME}
           </h2>
           <button type="button" onClick={vm.dismiss} aria-label="Close"
@@ -59,8 +61,11 @@ export function ClaimScreen({ onClose }: Props) {
         </div>
 
         {vm.phase === 'loading'     && <Message text="Checking your invite…" />}
-        {/* Already signed in + a calendar invite → nothing to create, just join. */}
-        {vm.phase === 'open'        && (vm.joinOnly ? <JoinForm vm={vm} /> : <ClaimForm vm={vm} />)}
+        {/* A guest link renders its own form: name + icon, no password (ADR-18).
+            Already signed in + a calendar invite → nothing to create, just join. */}
+        {vm.phase === 'open'        && (
+          vm.isGuestLink ? <GuestForm vm={vm} /> :
+          vm.joinOnly    ? <JoinForm vm={vm} />  : <ClaimForm vm={vm} />)}
         {vm.phase === 'claimed'     && <ClaimedScreen onDone={vm.dismiss} />}
         {vm.phase === 'done'        && <DoneScreen vm={vm} onDone={vm.dismiss} />}
         {vm.phase === 'expired'     && (
@@ -157,6 +162,89 @@ function ClaimForm({ vm }: { vm: ReturnType<typeof useClaimScreenVM> }) {
   )
 }
 
+// ── Guest join (the calendar's shared group link, ADR-18) ─────────────────────
+// The Doodle form: a name and an icon, nothing to remember. No password fields
+// and no autocomplete plumbing on purpose — there is no credential to save.
+
+function GuestForm({ vm }: { vm: ReturnType<typeof useClaimScreenVM> }) {
+  if (vm.guestBlocked) {
+    return (
+      <div className="p-5 space-y-4">
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-2)' }}>
+          This is <strong style={{ color: 'var(--text)' }}>{vm.calendarName ?? 'a calendar'}</strong>'s
+          shared guest link, and you already have a full account — guest links
+          only create temporary guest access.
+        </p>
+        <p className="text-xs leading-relaxed rounded-lg px-3 py-2"
+          style={{ background: 'var(--accent-bg)', color: 'var(--accent)' }}>
+          Ask the calendar's owner to send you a personal invite instead — it
+          joins your existing account to the calendar.
+        </p>
+        <button type="button" onClick={vm.dismiss}
+          className="w-full py-2 rounded-lg text-sm font-semibold text-white" style={{ background: 'var(--accent)' }}>
+          OK
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <form onSubmit={vm.submitGuest} className="p-5 space-y-4">
+      <p className="text-sm leading-relaxed" style={{ color: 'var(--text-2)' }}>
+        You've been invited to join{' '}
+        <strong style={{ color: 'var(--text)' }}>{vm.calendarName ?? 'this calendar'}</strong> as
+        a guest. Type your name, pick an icon, and you're in — no password, no
+        account.
+      </p>
+
+      <div>
+        <label className="field-label" htmlFor="guest-name">Your name</label>
+        <input id="guest-name" name="name" type="text" className="field-input"
+          placeholder="How the group knows you" maxLength={60}
+          value={vm.guestName} onChange={e => vm.setGuestName(e.target.value)}
+          autoComplete="off" required autoFocus />
+      </div>
+
+      <div>
+        <span className="field-label">Pick your icon</span>
+        <div className={`grid ${STYLE.avatarCols} gap-1.5`} role="radiogroup" aria-label="Your icon">
+          {AVATARS.map(a => {
+            const active = vm.avatarId === a.id
+            return (
+              <button key={a.id} type="button" role="radio" aria-checked={active} title={a.label}
+                onClick={() => vm.setAvatarId(a.id)}
+                className="flex items-center justify-center rounded-lg border transition-all"
+                style={{
+                  aspectRatio: '1', fontSize: STYLE.avatarFont,
+                  borderColor: active ? 'var(--accent)' : 'var(--border)',
+                  background:  active ? 'var(--accent-bg)' : 'var(--bg-subtle)',
+                  boxShadow:   active ? '0 0 0 2px var(--accent-bg)' : 'none',
+                }}>
+                {a.emoji}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      <p className="text-xs leading-relaxed rounded-lg px-3 py-2"
+        style={{ background: 'var(--accent-bg)', color: 'var(--accent)' }}>
+        Guest access lives in <strong>this browser only</strong> — you can't sign
+        in from another device, and the calendar's owner can remove guests at any
+        time. Keep coming back from this same phone or computer.
+      </p>
+
+      {vm.error && <ErrorNote text={vm.error} />}
+
+      <button type="submit" disabled={vm.submitting}
+        className="w-full py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50 transition-opacity"
+        style={{ background: 'var(--accent)' }}>
+        {vm.submitting ? 'Joining…' : `Join ${vm.calendarName ?? 'this calendar'}`}
+      </button>
+    </form>
+  )
+}
+
 // ── Join (already signed in, calendar invite) ─────────────────────────────────
 // The other half of "one QR does both". The scanner already has an account, so
 // there is nothing to create — only a membership to request. One tap, no form.
@@ -238,6 +326,30 @@ function DoneScreen({ vm, onDone }: {
   vm: ReturnType<typeof useClaimScreenVM>
   onDone: () => void
 }) {
+  // Guest joins are live immediately — no approval to wait for, and no password
+  // to warn about. The calendar is already open behind this dialog.
+  if (vm.isGuestLink) {
+    return (
+      <div className="p-5 space-y-4">
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-2)' }}>
+          You've joined{' '}
+          <strong style={{ color: 'var(--text)' }}>{vm.calendarName ?? 'the calendar'}</strong> as
+          a guest. You can add your availability and see the group's shared
+          events right away.
+        </p>
+        <p className="text-xs leading-relaxed rounded-lg px-3 py-2"
+          style={{ background: 'var(--accent-bg)', color: 'var(--accent)' }}>
+          Come back any time from this same browser — your guest access lives
+          here and nowhere else.
+        </p>
+        <button type="button" onClick={onDone}
+          className="w-full py-2 rounded-lg text-sm font-semibold text-white" style={{ background: 'var(--accent)' }}>
+          Open the calendar
+        </button>
+      </div>
+    )
+  }
+
   if (vm.joinOnly) {
     return (
       <div className="p-5 space-y-4">

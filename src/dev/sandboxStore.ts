@@ -11,7 +11,8 @@
 // UI without standing up Postgres. So sandbox mode supplies exactly that: a fake
 // multi-user world, held in localStorage, with enough fidelity to drive the
 // screens — a calendar you own, one you were invited into, a pending member
-// waiting for your approval, and a seat cap that fills up.
+// waiting for your approval, a guest who joined without signing in, and a seat
+// cap that fills up.
 //
 // WHAT THIS IS NOT
 // ----------------
@@ -26,6 +27,7 @@ import { nanoid } from 'nanoid'
 import type { Calendar, CalendarFeatures, CalendarMember, User, CalEvent } from '../types'
 import { NO_FEATURES } from '../types'
 import { IS_SANDBOX } from './devMode'
+import { SANDBOX_USER_ID, SANDBOX_MEMBER_ID, SANDBOX_GUEST_ID } from './sandboxPersona'
 
 const KEY = {
   calendars: 'calsync:sandbox:calendars',
@@ -33,9 +35,11 @@ const KEY = {
   seeded:    'calsync:sandbox:seeded',
 }
 
-// The persona you are signed in as in sandbox mode. Fixed so that "who am I"
-// survives a reload — the whole point is to come back to the same fake world.
-export const SANDBOX_ME = 'sandbox-you'
+// The persona you are signed in as in sandbox mode. Persisted (sandboxPersona)
+// so that "who am I" survives a reload — the whole point is to come back to the
+// same fake world. Normally the member ("You"); the Dev panel can switch it to
+// the guest, and every ownership/membership check below follows automatically.
+export const SANDBOX_ME = SANDBOX_USER_ID
 
 interface StoredCalendar {
   id:         string
@@ -60,6 +64,9 @@ interface StoredMember {
   status:     'pending' | 'approved'
   invitedAs:  string | null
   joinedAt:   string
+  // Mirrors users.is_guest (ADR-18). Optional so worlds seeded before guests
+  // existed keep parsing; absent means a regular signed-in member.
+  isGuest?:   boolean
 }
 
 function read<T>(key: string, fallback: T): T {
@@ -83,12 +90,18 @@ const readMembers   = () => read<StoredMember[]>(KEY.members, [])
 // Avatar ids must exist in AVATARS (auth/credentials.ts) or they silently fall
 // back to initials — which would make the seeded users look broken rather than
 // deliberate.
+// The seed always uses the FIXED ids, never SANDBOX_ME: the world must come out
+// identical whichever persona happens to be active when it is (re)built.
 const SEED_USERS: User[] = [
-  { id: SANDBOX_ME,     name: 'You',  color: '#7F77DD', avatar: 'compass',  createdAt: new Date().toISOString() },
-  { id: 'sandbox-ana',  name: 'Ana',  color: '#1D9E75', avatar: 'whale',    createdAt: new Date().toISOString() },
-  { id: 'sandbox-ben',  name: 'Ben',  color: '#D85A30', avatar: 'cactus',   createdAt: new Date().toISOString() },
-  { id: 'sandbox-cleo', name: 'Cleo', color: '#D4537E', avatar: 'lantern',  createdAt: new Date().toISOString() },
-  { id: 'sandbox-dev',  name: 'Dev',  color: '#378ADD', avatar: 'mushroom', createdAt: new Date().toISOString() },
+  { id: SANDBOX_MEMBER_ID, name: 'You',  color: '#7F77DD', avatar: 'compass',  createdAt: new Date().toISOString() },
+  { id: 'sandbox-ana',     name: 'Ana',  color: '#1D9E75', avatar: 'whale',    createdAt: new Date().toISOString() },
+  { id: 'sandbox-ben',     name: 'Ben',  color: '#D85A30', avatar: 'cactus',   createdAt: new Date().toISOString() },
+  { id: 'sandbox-cleo',    name: 'Cleo', color: '#D4537E', avatar: 'lantern',  createdAt: new Date().toISOString() },
+  { id: 'sandbox-dev',     name: 'Dev',  color: '#378ADD', avatar: 'mushroom', createdAt: new Date().toISOString() },
+  // A GUEST (ADR-18): joined through the guest link with no sign-in. Guests
+  // never pick an avatar, so none is set — the initials fallback is the
+  // authentic rendering for this kind of account.
+  { id: SANDBOX_GUEST_ID,  name: 'Gus',  color: '#8E7C3A', createdAt: new Date().toISOString() },
 ]
 
 // Dates relative to today, so the seeded events are always in the month you land
@@ -113,9 +126,10 @@ export function seedSandbox(): SeedResult {
   const now      = new Date().toISOString()
 
   const calendars: StoredCalendar[] = [
-    // One you OWN — exercises Manage, invites, the approval queue, the seat cap.
-    // Plain: every feature off, which is the classic availability calendar.
-    { id: teamId,  name: 'Team planning', ownerId: SANDBOX_ME,    maxMembers: 8,
+    // One the MEMBER persona owns — exercises Manage, invites, the approval
+    // queue, the seat cap. Plain: every feature off, the classic availability
+    // calendar.
+    { id: teamId,  name: 'Team planning', ownerId: SANDBOX_MEMBER_ID, maxMembers: 8,
       features: NO_FEATURES, createdAt: now },
     // One you were INVITED into — exercises "Shared with me" and Leave. Seeded as
     // a SPORTS calendar so both shapes are on screen at once: this is what the
@@ -126,23 +140,37 @@ export function seedSandbox(): SeedResult {
   ]
 
   const members: StoredMember[] = [
-    // Your own calendar: you plus two approved, plus one PENDING so the approval
-    // queue has something in it the moment you open Manage.
-    { calendarId: teamId, userId: SANDBOX_ME,     status: 'approved', invitedAs: null,   joinedAt: now },
-    { calendarId: teamId, userId: 'sandbox-ana',  status: 'approved', invitedAs: 'Ana',  joinedAt: now },
-    { calendarId: teamId, userId: 'sandbox-ben',  status: 'approved', invitedAs: 'Ben',  joinedAt: now },
-    { calendarId: teamId, userId: 'sandbox-cleo', status: 'pending',  invitedAs: 'Cleo', joinedAt: now },
+    // The member persona's own calendar: them plus two approved, plus one
+    // PENDING so the approval queue has something in it the moment they open
+    // Manage.
+    { calendarId: teamId, userId: SANDBOX_MEMBER_ID, status: 'approved', invitedAs: null,   joinedAt: now },
+    { calendarId: teamId, userId: 'sandbox-ana',     status: 'approved', invitedAs: 'Ana',  joinedAt: now },
+    { calendarId: teamId, userId: 'sandbox-ben',     status: 'approved', invitedAs: 'Ben',  joinedAt: now },
+    { calendarId: teamId, userId: 'sandbox-cleo',    status: 'pending',  invitedAs: 'Cleo', joinedAt: now },
+    // A guest member (ADR-18): came in through the guest link, no account
+    // credentials. Exercises the "guest" badge and Remove wording in Manage —
+    // and is who the Dev panel's guest persona signs you in as, so this is
+    // deliberately their ONLY calendar (a real guest link joins exactly one).
+    { calendarId: teamId, userId: SANDBOX_GUEST_ID,  status: 'approved', invitedAs: null,   joinedAt: now, isGuest: true },
 
-    // Ana's calendar, which you are a member of but do not own.
-    { calendarId: fiveAId, userId: 'sandbox-ana', status: 'approved', invitedAs: null,  joinedAt: now },
-    { calendarId: fiveAId, userId: SANDBOX_ME,    status: 'approved', invitedAs: 'You', joinedAt: now },
-    { calendarId: fiveAId, userId: 'sandbox-dev', status: 'approved', invitedAs: 'Dev', joinedAt: now },
+    // Ana's calendar, which the member persona belongs to but does not own.
+    { calendarId: fiveAId, userId: 'sandbox-ana',     status: 'approved', invitedAs: null,  joinedAt: now },
+    { calendarId: fiveAId, userId: SANDBOX_MEMBER_ID, status: 'approved', invitedAs: 'You', joinedAt: now },
+    { calendarId: fiveAId, userId: 'sandbox-dev',     status: 'approved', invitedAs: 'Dev', joinedAt: now },
   ]
 
   const events: CalEvent[] = [
     {
-      id: nanoid(), calendarId: teamId, userId: SANDBOX_ME,
+      id: nanoid(), calendarId: teamId, userId: SANDBOX_MEMBER_ID,
       title: 'Sprint planning', date: dayOffset(1), startHour: 10, endHour: 11.5,
+      visibility: 'public', tags: [], recurring: { frequency: 'none' },
+      createdAt: now,
+    },
+    // The guest's own event, so switching to the guest persona lands on a grid
+    // where "your events" is not empty.
+    {
+      id: nanoid(), calendarId: teamId, userId: SANDBOX_GUEST_ID,
+      title: 'Helping with setup', date: dayOffset(2), startHour: 9, endHour: 10,
       visibility: 'public', tags: [], recurring: { frequency: 'none' },
       createdAt: now,
     },
@@ -167,7 +195,7 @@ export function seedSandbox(): SeedResult {
       createdAt: now,
     },
     {
-      id: nanoid(), calendarId: fiveAId, userId: SANDBOX_ME,
+      id: nanoid(), calendarId: fiveAId, userId: SANDBOX_MEMBER_ID,
       title: 'Training', date: dayOffset(5), startHour: 19, endHour: 20,
       visibility: 'public', tags: [], recurring: { frequency: 'weekly' },
       createdAt: now,
@@ -248,6 +276,9 @@ export function sbListMembers(
       invitedAs: m.invitedAs,
       joinedAt:  m.joinedAt,
       isOwner:   cal?.ownerId === m.userId,
+      // Seeded from the fixture (real guest links need anonymous auth + RLS,
+      // which the sandbox does not model — this only drives the guest UI).
+      isGuest:   m.isGuest === true,
     }))
 }
 

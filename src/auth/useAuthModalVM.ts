@@ -21,6 +21,7 @@ import { useAuthSession }      from './useAuth'
 import { useStore }            from '../store/useStore'
 import { supabase, SUPABASE_ENABLED } from '../lib/supabase'
 import { identifierError, toDisplayHandle } from './credentials'
+import { log } from '../lib/log'
 
 export interface AuthModalVM {
   // Bound fields.
@@ -73,10 +74,21 @@ export function useAuthModalVM(onClose: () => void): AuthModalVM {
 
       // The profile row is created when the invite is claimed. If it is missing,
       // this is a pre-existing account whose row never landed — recreate it
-      // rather than leaving the user with no identity in the UI.
+      // rather than leaving the user with no identity in the UI. If that
+      // recreate also fails (e.g. RLS rejects the insert), stay on the modal
+      // with the reason rather than closing onto an identity-less session.
       const name = toDisplayHandle(username)
-      if (!store.users.some(u => u.id === uid)) await store.createAuthUser(uid, name, name)
-      else                                      store.setActiveUser(uid)
+      if (!store.users.some(u => u.id === uid)) {
+        try {
+          await store.createAuthUser(uid, name, name)
+        } catch (err) {
+          log.error('auth', 'profile row insert failed on sign-in', err)
+          setError('Signed in, but your profile could not be loaded. Try again, or ask the administrator.')
+          return
+        }
+      } else {
+        store.setActiveUser(uid)
+      }
 
       await auth.refreshApproval()
       onClose()

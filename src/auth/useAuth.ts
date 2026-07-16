@@ -18,6 +18,10 @@ import type { User as SupabaseUser } from '@supabase/supabase-js'
 import { supabase, SUPABASE_ENABLED } from '../lib/supabase'
 import { log } from '../lib/log'
 import { toAccountEmail, toDisplayHandle, legacyPassword } from './credentials'
+// Dev-only import, deliberately from sandboxPersona and NOT sandboxStore: it
+// carries persona constants only (no fixture data), so nothing meaningful can
+// leak into a production bundle, where SANDBOX_IS_GUEST is pinned false anyway.
+import { SANDBOX_IS_GUEST, SANDBOX_GUEST_ID, setSandboxPersona } from '../dev/sandboxPersona'
 
 export interface SignUpInput {
   inviteCode: string
@@ -32,6 +36,13 @@ export interface AuthSession {
   username:        string | null      // handle only — never a full email address
   approved:        boolean | null     // null = unknown / not signed in
 
+  // GUEST accounts (ADR-18): joined a calendar through its guest link, over an
+  // anonymous Supabase session. Never `approved` — participation rests on
+  // users.is_guest + calendar membership instead. The UI gates on
+  // `canParticipate` rather than re-deriving "approved OR guest" everywhere.
+  isGuest:         boolean
+  canParticipate:  boolean
+
   // `username` here is the IDENTIFIER as typed: a username, or an email address
   // if the account was created with one. credentials.ts derives the auth email.
   //
@@ -42,6 +53,13 @@ export interface AuthSession {
 
   // Returns the new auth uid on success (needed to create the profile row).
   signUp: (input: SignUpInput) => Promise<{ userId: string | null; error: string | null }>
+
+  // Guest entry (ADR-18): an ANONYMOUS Supabase session — no credentials at all.
+  // The session lives in this browser's storage and nowhere else; signing out of
+  // it is permanent, which is why the UI confirms before letting a guest do so.
+  // Reuses an existing anonymous session rather than minting a second auth user
+  // for the same device. Requires "Allow anonymous sign-ins" in Supabase Auth.
+  signInAnonymously: () => Promise<{ userId: string | null; error: string | null }>
 
   signOut:         () => Promise<void>
   refreshApproval: () => Promise<void>
@@ -67,19 +85,55 @@ function friendlyAuthError(raw: string): string {
   return raw
 }
 
-async function fetchApproved(uid: string): Promise<boolean | null> {
+// ── Sandbox guest session (dev only) ─────────────────────────────────────────
+// What useAuthSession returns when the Dev panel's SANDBOX persona is the guest
+// (ADR-18): a simulated already-signed-in guest, so every consumer — header,
+// home view, sign-out confirmation — renders the genuine guest experience with
+// no server. Faked HERE, at the auth boundary, so no surface needs a sandbox
+// special case of its own.
+//
+// Signing out switches the sandbox back to the member persona (reload included),
+// which mirrors the real consequence: the anonymous session is gone for good.
+const SANDBOX_GUEST_SESSION: AuthSession = {
+  isAuthenticated: true,
+  isLoading:       false,
+  userId:          SANDBOX_GUEST_ID,
+  username:        null,    // anonymous session — a guest has no handle
+  approved:        false,   // never approved, by design (ADR-18)
+  isGuest:         true,
+  canParticipate:  true,
+  signIn: async () =>
+    'You are the sandbox guest — switch back to the member persona in the Dev panel instead.',
+  signUp: async () => ({
+    userId: null,
+    error:  'You are the sandbox guest — switch back to the member persona in the Dev panel instead.',
+  }),
+  signInAnonymously: async () => ({ userId: SANDBOX_GUEST_ID, error: null }),
+  signOut:           async () => { setSandboxPersona('member') },  // reloads
+  refreshApproval:   async () => {},
+}
+
+interface ProfileFlags { approved: boolean | null; isGuest: boolean }
+
+// One read for both account flags: approval (the site gate) and is_guest
+// (ADR-18). Both live on the caller's own users row, which RLS always lets them
+// read. A row that cannot be read reports approved=null (unknown) and
+// isGuest=false — a network hiccup must never dress a real account as a guest.
+async function fetchProfileFlags(uid: string): Promise<ProfileFlags> {
   const { data, error } = await supabase
-    .from('users').select('approved').eq('id', uid).maybeSingle()
+    .from('users').select('approved, is_guest').eq('id', uid).maybeSingle()
   if (error) {
-    log.warn('auth', 'could not read approval status', error.message)
-    return null
+    log.warn('auth', 'could not read account flags', error.message)
+    return { approved: null, isGuest: false }
   }
-  return (data as { approved?: boolean } | null)?.approved ?? false
+  const row = data as { approved?: boolean; is_guest?: boolean } | null
+  return { approved: row?.approved ?? false, isGuest: row?.is_guest === true }
 }
 
 export function useAuthSession(): AuthSession {
   const [user,        setUser]        = useState<SupabaseUser | null>(null)
   const [approved,    setApproved]    = useState<boolean | null>(null)
+  const [isGuest,     setIsGuest]     = useState(false)
   const [authLoading, setAuthLoading] = useState(SUPABASE_ENABLED)
 
   useEffect(() => {
@@ -97,14 +151,17 @@ export function useAuthSession(): AuthSession {
     return () => subscription.unsubscribe()
   }, [])
 
-  // Keep the approval flag in sync with the signed-in user.
+  // Keep the account flags in sync with the signed-in user.
   useEffect(() => {
-    if (!SUPABASE_ENABLED || !user) { setApproved(null); return }
-    fetchApproved(user.id).then(setApproved)
+    if (!SUPABASE_ENABLED || !user) { setApproved(null); setIsGuest(false); return }
+    fetchProfileFlags(user.id).then(f => { setApproved(f.approved); setIsGuest(f.isGuest) })
   }, [user])
 
   const refreshApproval = useCallback(async () => {
-    if (SUPABASE_ENABLED && user) setApproved(await fetchApproved(user.id))
+    if (!SUPABASE_ENABLED || !user) return
+    const f = await fetchProfileFlags(user.id)
+    setApproved(f.approved)
+    setIsGuest(f.isGuest)
   }, [user])
 
   // ── Actions ─────────────────────────────────────────────────────────────────
@@ -190,10 +247,40 @@ export function useAuthSession(): AuthSession {
     return { userId: data.user.id, error: null }
   }
 
+  // Guest entry (ADR-18). An anonymous session already present in this browser
+  // is REUSED: signInAnonymously() mints a fresh auth user per call, and a
+  // guest re-tapping the group link must come back as themselves, not as a
+  // second seat-consuming account.
+  async function signInAnonymously(): Promise<{ userId: string | null; error: string | null }> {
+    if (!SUPABASE_ENABLED)
+      return { userId: null, error: 'Supabase is not configured (see .env.example).' }
+
+    const { data: { session: existing } } = await supabase.auth.getSession()
+    if (existing?.user.is_anonymous) return { userId: existing.user.id, error: null }
+
+    const { data, error } = await supabase.auth.signInAnonymously()
+    if (error) {
+      log.error('auth', 'anonymous sign-in failed', error.message)
+      // The one likely-misconfiguration case gets a message that names the fix.
+      if (/anonymous.*(disabled|not allowed|not enabled)/i.test(error.message)) {
+        return { userId: null, error: 'Guest access is not enabled on this server (Supabase: allow anonymous sign-ins).' }
+      }
+      return { userId: null, error: friendlyAuthError(error.message) }
+    }
+    return { userId: data.user?.id ?? null, error: null }
+  }
+
   async function signOut(): Promise<void> {
     if (!SUPABASE_ENABLED) return
     await supabase.auth.signOut()
   }
+
+  // Sandbox guest persona: hand back the simulated session instead of the inert
+  // real one. AFTER every hook above (so the rules of hooks hold — they all
+  // no-op when SUPABASE_ENABLED is false, which sandbox guarantees). The leading
+  // `import.meta.env.DEV &&` is load-bearing: it lets a production build fold
+  // this branch away entirely (see dev/devMode.ts).
+  if (import.meta.env.DEV && SANDBOX_IS_GUEST) return SANDBOX_GUEST_SESSION
 
   return {
     isAuthenticated: !!user,
@@ -201,8 +288,11 @@ export function useAuthSession(): AuthSession {
     userId:          user?.id ?? null,
     username:        user?.email ? toDisplayHandle(user.email) : null,
     approved,
+    isGuest,
+    canParticipate:  approved === true || isGuest,
     signIn,
     signUp,
+    signInAnonymously,
     signOut,
     refreshApproval,
   }

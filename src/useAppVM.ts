@@ -8,9 +8,12 @@
 
 import { useState, useEffect, useRef } from 'react'
 import type { User, CalEvent, Calendar } from './types'
-import { NO_FEATURES }                 from './types'
+import { NO_FEATURES, isOverviewCalendar } from './types'
 import { useStore }                    from './store/useStore'
 import { listCalendars }               from './calendars/calendarService'
+import { IS_SANDBOX }                  from './dev/devMode'
+import { IS_DEMO, exitDemo }           from './demo/demoMode'
+import { DEMO_TEAM_CAL }               from './demo/demoWorld'
 import { useAuthSession, type AuthSession } from './auth/useAuth'
 import { copyShareUrl }                from './sharing/urlState'
 import { downloadIcal, parseIcal }     from './ical/icalUtils'
@@ -44,6 +47,14 @@ export interface AppVM {
   activeCalendar:   Calendar | null
   openCalendar:     (calendarId: string) => void
   goHome:           () => void
+  // The OVERVIEW: every event I am part of, across all my calendars, in one
+  // read-only grid. `isOverview` is what the view gates the write affordances
+  // (import, share, add) on while it is open.
+  isOverview:       boolean
+  openOverview:     () => void
+  // Every calendar I belong to — the header switcher renders from this so the
+  // user can jump between calendars (and the overview) without going home.
+  calendars:        Calendar[]
   // Do I own the calendar that is open? Decides whether the Manage button is
   // drawn. A UI convenience ONLY: every calendar RPC re-checks owns_calendar()
   // server-side, so a user who forces this true gains nothing.
@@ -57,6 +68,19 @@ export interface AppVM {
   showAddPersonBtn: boolean
   addPersonIsTest:  boolean       // Supabase mode + test mode → local-only persona
 
+  // Demo mode (the public landing page — see demo/demoMode.ts). When true the
+  // shell is rendered EMBEDDED inside landing/LandingPage, and "Sign in" leaves
+  // the demo for the real app instead of opening the auth modal (there is no
+  // backend to authenticate against in here).
+  isDemo:   boolean
+  exitDemo: () => void
+
+  // Sign out, with a confirmation when the session is a GUEST's (ADR-18): a
+  // guest session exists only in this browser and has no way back in, so
+  // signing out is leaving for good. The view binds the button to this, never
+  // to auth.signOut directly.
+  handleSignOut: () => Promise<void>
+
   // Invites. `showClaimScreen` is true when the page was opened from a QR link
   // (#invite=…); the claim screen then decides for itself whether that code is
   // still claimable. `isAdmin` gates the mint panel — UI convenience only, the
@@ -64,6 +88,11 @@ export interface AppVM {
   showClaimScreen: boolean; dismissClaimScreen: () => void
   isAdmin:         boolean
   showInvitePanel: boolean; setShowInvitePanel: (v: boolean) => void
+
+  // The most recent failed write (rolled back), or null. Rendered by the shell
+  // as a dismissible banner so a rejected save never disappears silently.
+  lastError:    string | null
+  dismissError: () => void
 
   // Theme.
   theme:       Theme
@@ -101,8 +130,9 @@ export function useAppVM(): AppVM {
     setActiveUser, createUser, createTestUser, addEvent,
     isLoading, initialize,
     selectedDate, setSelectedDate,
-    activeCalendarId, openCalendar,
-    features, setFeatures,
+    activeCalendarId, openCalendar, openOverview,
+    features, setFeatures, setCalendars,
+    lastError, dismissError,
   } = useStore()
 
   const auth = useAuthSession()
@@ -155,14 +185,42 @@ export function useAppVM(): AppVM {
   // Re-fetched when a calendar is opened or the admin panel closes: both are
   // moments when membership, seats, or the pending queue may just have changed.
   useEffect(() => {
-    if (!SUPABASE_ENABLED || !auth.isAuthenticated || !auth.approved) {
+    // The sandbox and the demo have calendars too (fixtures) — listCalendars
+    // resolves them without auth, so they take the same path.
+    // canParticipate = approved OR guest (ADR-18): a guest's list is the one
+    // calendar their guest link joined, which the server scopes for us.
+    const fixture = (import.meta.env.DEV && IS_SANDBOX) || IS_DEMO
+    if (!fixture && (!SUPABASE_ENABLED || !auth.isAuthenticated || !auth.canParticipate)) {
       setMyCalendars([])
       return
     }
     let cancelled = false
     listCalendars().then(cs => { if (!cancelled) setMyCalendars(cs) })
     return () => { cancelled = true }
-  }, [auth.isAuthenticated, auth.userId, auth.approved, activeCalendarId, adminCalendarId])
+  }, [auth.isAuthenticated, auth.userId, auth.canParticipate, activeCalendarId, adminCalendarId])
+
+  // Mirror the list into the store, where deep consumers (the event detail
+  // resolving an event's source-calendar name) read it from. Pushed rather than
+  // fetched there for the usual import-cycle reason — see useStore.calendars.
+  useEffect(() => { setCalendars(myCalendars) }, [myCalendars, setCalendars])
+
+  // The OVERVIEW is the default landing: as soon as the calendar list arrives
+  // and the user belongs to at least one readable calendar, open it — the user
+  // starts on their own all-my-events calendar and switches to a sub-calendar
+  // from there. ONCE per page load (the ref): "go home" must stay reachable,
+  // and this effect re-runs on every list refresh.
+  const autoOpenedOverview = useRef(false)
+  useEffect(() => {
+    if (autoOpenedOverview.current || activeCalendarId !== null) return
+    const readable = myCalendars.filter(c => c.myStatus === 'approved')
+    if (readable.length === 0) return
+    autoOpenedOverview.current = true
+    // The landing demo opens straight into a real calendar instead: the
+    // overview is read-only, and the demo's whole point is that the visitor
+    // can add an event and vote in the poll the moment the page paints.
+    if (IS_DEMO) { openCalendar(DEMO_TEAM_CAL); return }
+    openOverview(readable.map(c => c.id))
+  }, [myCalendars, activeCalendarId, openCalendar, openOverview])
 
   // Apply theme to <html> and persist it.
   useEffect(() => {
@@ -178,6 +236,20 @@ export function useAppVM(): AppVM {
     else                  createUser(newName.trim())
     setNewName('')
     setShowUserPanel(false)
+  }
+
+  // A guest signing out cannot sign back in — the anonymous session in this
+  // browser IS the account (ADR-18). Confirm before burning that bridge; their
+  // membership and events survive on the server for the owner to see/remove.
+  async function handleSignOut() {
+    if (auth.isGuest) {
+      const sure = window.confirm(
+        'You joined as a guest, so there is no way to sign back in — ' +
+        'signing out ends your access from this browser for good. Sign out anyway?')
+      if (!sure) return
+    }
+    await auth.signOut()
+    openCalendar(null)   // whatever was open belonged to the signed-out account
   }
 
   // Share link contains ONLY the active user's own data — never anyone else's.
@@ -224,8 +296,21 @@ export function useAppVM(): AppVM {
   // whether I own it). Null on the home view, and null for a beat after opening
   // one while the list is in flight — which is why the Manage button is derived
   // from it rather than from anything the client could assert on its own.
+  // Also null in the OVERVIEW, which is no calendar row at all — so Manage and
+  // the feature-driven buttons stay away without a special case.
   const activeCalendar =
     myCalendars.find(c => c.id === activeCalendarId) ?? null
+
+  // Open the overview over the calendars I can actually read: the ones where my
+  // membership is approved (a pending one would only contribute zero rows, but
+  // there is no reason to even ask). The list is re-fetched rather than taken
+  // from state so the very first click — before the effect above has landed —
+  // still opens a complete overview.
+  async function handleOpenOverview() {
+    const cs = await listCalendars()
+    setMyCalendars(cs)
+    await openOverview(cs.filter(c => c.myStatus === 'approved').map(c => c.id))
+  }
 
   // Publish the open calendar's features into the store, which is where every
   // consumer (event form, day view, stats panel) reads them from. Pushed from
@@ -253,6 +338,9 @@ export function useAppVM(): AppVM {
     // Leaving a calendar also closes its admin panel — it belongs to that
     // calendar, and would otherwise linger over the home view.
     goHome: () => { setAdminCalendarId(null); openCalendar(null) },
+    isOverview: isOverviewCalendar(activeCalendarId),
+    openOverview: () => { handleOpenOverview() },
+    calendars: myCalendars,
     canAdminActive: activeCalendar?.isOwner === true,
     adminCalendarId,
     openAdmin:  (id: string) => setAdminCalendarId(id),
@@ -261,13 +349,22 @@ export function useAppVM(): AppVM {
     // Drawn only for a calendar whose owner turned one of these on — so the
     // button follows the calendar you are in, not the build you deployed.
     showStatsButton:  features.leaderboard || features.challenges,
-    showAddPersonBtn: !SUPABASE_ENABLED || TEST_MODE,
+    // Never for a guest (ADR-18): they are exactly one person on exactly one
+    // calendar, and extra personas would not survive contact with the server.
+    showAddPersonBtn: (!SUPABASE_ENABLED || TEST_MODE) && !auth.isGuest,
     addPersonIsTest:  SUPABASE_ENABLED,
+
+    isDemo: IS_DEMO,
+    exitDemo,
+
+    handleSignOut,
 
     showClaimScreen:    hasInviteLink,
     dismissClaimScreen: () => setHasInviteLink(false),
     isAdmin,
     showInvitePanel, setShowInvitePanel,
+
+    lastError, dismissError,
 
     theme,
     toggleTheme: () => setTheme(t => (t === 'dark' ? 'light' : 'dark')),

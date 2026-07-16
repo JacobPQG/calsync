@@ -181,6 +181,79 @@ export function CalendarAdmin({ calendarId, onClose, onDeleted }: Props) {
           )}
         </Section>
 
+        {/* ── 2b. Guest link (ADR-18) ──────────────────────────────────── */}
+        {/* One shared link for the group chat: whoever opens it joins as a
+            passwordless GUEST, immediately — no approval queue. Each join takes
+            a seat under the same cap; "New link" rotates (kills) the old one. */}
+        <Section title="Guest link — share with a group">
+          <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            Drop this <strong>one link</strong> into a group chat. Anyone who opens
+            it joins as a <strong>guest</strong>: they type a name, pick an icon,
+            and are in — no password, no account. Guests can add events like
+            everyone else, but only in this calendar, and only from the device
+            they joined on. Removing a guest deletes their access and events.
+          </p>
+
+          {vm.guestLink ? (
+            <div className="flex flex-col items-start gap-2 rounded-xl p-3"
+              style={{ background: 'var(--bg-subtle)', border: '0.5px solid var(--border)' }}>
+              <div className="flex items-center gap-3 flex-wrap">
+                <QrCode value={vm.guestLink.url} size={STYLE.qrSize}
+                  filename="guest-link" />
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-[11px]" style={{ color: 'var(--text-2)' }}>
+                    {vm.guestLink.useCount} guest{vm.guestLink.useCount === 1 ? '' : 's'} joined so far
+                  </span>
+                  <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    {vm.guestLink.expiresAt
+                      ? `Works until ${new Date(vm.guestLink.expiresAt).toLocaleString()}`
+                      : 'Never expires'}
+                  </span>
+                  <button className="btn-toolbar self-start"
+                    onClick={vm.copyGuestLink}
+                    style={vm.copied === vm.guestLink.code
+                      ? { borderColor: 'var(--overlap-text)', color: 'var(--overlap-text)' }
+                      : {}}>
+                    {vm.copied === vm.guestLink.code ? '✓ Copied' : 'Copy link for WhatsApp'}
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <button className="btn-toolbar" disabled={vm.mintingGuestLink}
+                      onClick={vm.createGuestLink}
+                      title="Create a fresh link — the current one stops working">
+                      ↻ New link
+                    </button>
+                    <button className="btn-toolbar" onClick={vm.revokeGuestLink}
+                      style={{ color: 'var(--danger)' }}
+                      title="Stop this link from admitting anyone else. Guests who already joined stay until you remove them.">
+                      Revoke
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3 flex-wrap">
+              <label className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--text-2)' }}>
+                Valid for
+                <select className="field-input" style={{ padding: '4px 8px' }}
+                  value={String(vm.guestLifetime)}
+                  onChange={e => vm.setGuestLifetime(
+                    e.target.value === 'null' ? null : Number(e.target.value))}>
+                  {vm.lifetimeOptions.map(o => (
+                    <option key={o.label} value={String(o.hours)}>{o.label}</option>
+                  ))}
+                </select>
+              </label>
+              <div className="flex-1" />
+              <button className="px-4 py-1.5 text-sm rounded-lg text-white font-medium disabled:opacity-40"
+                style={{ background: 'var(--accent)' }}
+                disabled={vm.mintingGuestLink} onClick={vm.createGuestLink}>
+                {vm.mintingGuestLink ? 'Creating…' : 'Create guest link'}
+              </button>
+            </div>
+          )}
+        </Section>
+
         {/* ── The freshly minted batch ─────────────────────────────────── */}
         {vm.fresh.length > 0 && (
           <Section title={`${vm.fresh.length} QR invite${vm.fresh.length === 1 ? '' : 's'} — send each to the right person`}>
@@ -226,13 +299,23 @@ export function CalendarAdmin({ calendarId, onClose, onDeleted }: Props) {
                     owner
                   </span>
                 )}
+                {m.isGuest && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full font-semibold"
+                    style={{ background: 'var(--warning-bg)', color: 'var(--warning)' }}
+                    title="Joined through the guest link — no password, this calendar only">
+                    guest
+                  </span>
+                )}
                 <div className="flex-1" />
                 {/* The owner cannot be removed from their own calendar — it would
-                    leave a calendar whose admin cannot read it. */}
+                    leave a calendar whose admin cannot read it. Removing a GUEST
+                    deletes their whole (temporary) account with it — say so. */}
                 {!m.isOwner && (
                   <button className="btn-toolbar" disabled={vm.busyId === m.userId}
                     onClick={() => vm.reject(m.userId, false)}
-                    title="Remove from this calendar. Their account is untouched.">
+                    title={m.isGuest
+                      ? 'Remove this guest. Their access and their events are deleted.'
+                      : 'Remove from this calendar. Their account is untouched.'}>
                     Remove
                   </button>
                 )}

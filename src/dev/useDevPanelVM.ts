@@ -5,6 +5,9 @@ import { useState } from 'react'
 import {
   DEV_TOOLS, DEV_MODE, IS_SANDBOX, LIVE_UNAVAILABLE, setDevMode, type DevMode,
 } from './devMode'
+import {
+  SANDBOX_PERSONA, setSandboxPersona, type SandboxPersona,
+} from './sandboxPersona'
 import { useStore } from '../store/useStore'
 
 export interface DevPanelVM {
@@ -33,6 +36,14 @@ export interface DevPanelVM {
   personas:     { id: string; name: string }[]
   activeUserId: string | null
   setActiveUser: (id: string) => void
+
+  // Which ACCOUNT the sandbox is signed in as: the full member ("You") or the
+  // guest (ADR-18), whose whole experience — header, scoping, refusals — the
+  // app then reproduces. Deeper than "Act as" above, which only changes who
+  // events are posted as; this changes who the session belongs to. Switching
+  // reloads, same contract as the backend switch.
+  persona:    SandboxPersona
+  setPersona: (p: SandboxPersona) => void
 }
 
 export function useDevPanelVM(): DevPanelVM {
@@ -57,8 +68,12 @@ export function useDevPanelVM(): DevPanelVM {
     // See the note in dev/devMode.ts before touching it.
     reset: () => {
       if (!import.meta.env.DEV) return
-      void import('./sandboxStore').then(({ resetSandbox }) => {
+      void Promise.all([
+        import('./sandboxStore'),
+        import('./sandboxPolls'),
+      ]).then(([{ resetSandbox }, { resetSandboxPolls }]) => {
         resetSandbox()
+        resetSandboxPolls()
         // The seeded users and events live in the ordinary localStorage keys, so
         // clearing the sandbox's own keys is not enough — the next load would
         // re-seed on top of the old people. Wipe those too.
@@ -72,5 +87,11 @@ export function useDevPanelVM(): DevPanelVM {
     personas: users.map(u => ({ id: u.id, name: u.name })),
     activeUserId,
     setActiveUser,
+
+    persona: SANDBOX_PERSONA,
+    setPersona: (p) => {
+      if (p === SANDBOX_PERSONA) return
+      setSandboxPersona(p)   // re-points the active user, then reloads
+    },
   }
 }

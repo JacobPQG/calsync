@@ -19,7 +19,7 @@ import { useAuthSession }  from '../auth/useAuth'
 import { useStore }        from '../store/useStore'
 import { supabase, SUPABASE_ENABLED } from '../lib/supabase'
 import { identifierError, passwordError, normalizeUsername, toDisplayHandle } from '../auth/credentials'
-import { lookupInvite, redeemInvite, type InviteStatus } from './inviteService'
+import { lookupInvite, redeemInvite, joinAsGuest, type InviteStatus } from './inviteService'
 import { readInviteCode, clearInviteFromUrl } from './inviteLink'
 import { log } from '../lib/log'
 
@@ -40,6 +40,17 @@ export interface ClaimScreenVM {
   // not the scanner has been here before.
   joinOnly: boolean
   join:     () => Promise<void>
+
+  // ── Guest links (ADR-18) ───────────────────────────────────────────────────
+  // The Doodle path: this is the calendar's shared GROUP link. The form is a
+  // display name + icon — no username, no password, nothing to remember.
+  isGuestLink: boolean
+  guestName:   string; setGuestName: (v: string) => void
+  // TRUE when a signed-in PASSWORD account opened a guest link. Guest links only
+  // mint guests; the screen explains and offers nothing else (the owner can send
+  // them a personal invite).
+  guestBlocked: boolean
+  submitGuest:  (e: React.FormEvent) => Promise<void>
 
   username: string; setUsername: (v: string) => void
   password: string; setPassword: (v: string) => void
@@ -73,6 +84,8 @@ export function useClaimScreenVM(onClose: () => void): ClaimScreenVM {
   const [inviteeName,  setInviteeName]  = useState<string | null>(null)
   const [calendarName, setCalendarName] = useState<string | null>(null)
   const [isCalendar,   setIsCalendar]   = useState(false)
+  const [isGuestLink,  setIsGuestLink]  = useState(false)
+  const [guestName,    setGuestName]    = useState('')
   const [username,     setUsername]     = useState('')
   const [password,     setPassword]     = useState('')
   const [avatarId,     setAvatarId]     = useState<string | null>(null)
@@ -86,20 +99,79 @@ export function useClaimScreenVM(onClose: () => void): ClaimScreenVM {
     setCode(found)
 
     let cancelled = false
-    lookupInvite(found).then(({ status, inviteeName: name, calendarId, calendarName: cal }) => {
+    lookupInvite(found).then(({ status, inviteeName: name, calendarId, calendarName: cal, isGuestLink: guest }) => {
       if (cancelled) return
       setPhase(status)
       setInviteeName(name)
       setCalendarName(cal)
       setIsCalendar(calendarId !== null)
+      setIsGuestLink(guest)
       setUsername(suggestUsername(name))
     })
     return () => { cancelled = true }
   }, [])
 
   // Already signed in, and this is a calendar invite → nothing to create, just
-  // join. The account exists; only the membership is missing.
-  const joinOnly = isCalendar && auth.isAuthenticated
+  // join. The account exists; only the membership is missing. Guest links are
+  // NOT this path: they never redeem, and a password account cannot use one.
+  const joinOnly = isCalendar && auth.isAuthenticated && !isGuestLink
+
+  // A signed-in PASSWORD account holding the group's guest link. join_as_guest
+  // would refuse them anyway (the anonymous-session check); this just says so
+  // before they type anything. An existing GUEST session is fine — re-joining
+  // their calendar is idempotent server-side.
+  const guestBlocked = isGuestLink && auth.isAuthenticated && !auth.isGuest
+
+  // The guest path (ADR-18), in the order the comments in db/schema/50_invites.sql
+  // assume: anonymous session → own profile row → join_as_guest. The profile row
+  // is created client-side through the same store call the signup flow uses, so
+  // guests get the same data shape and palette colors as everyone else; the
+  // server then flags it is_guest (a column no client can write) and takes the
+  // seat. On success the app drops the guest straight into the calendar — there
+  // is nothing else their account can see.
+  async function submitGuest(e: React.FormEvent) {
+    e.preventDefault()
+    setError(null)
+
+    if (!code) { setError('This invite link is malformed.'); return }
+    const name = guestName.trim()
+    if (name.length < 2)  { setError('Enter your name — it is how the group will see you.'); return }
+    if (name.length > 60) { setError('That name is too long.'); return }
+    if (!avatarId) { setError('Pick an icon.'); return }
+
+    setSubmitting(true)
+    try {
+      const { userId, error: authErr } = await auth.signInAnonymously()
+      if (authErr)  { setError(authErr); return }
+      if (!userId)  { setError('Could not start a guest session.'); return }
+
+      // Idempotent on re-tap: an existing guest already has a profile row.
+      if (!store.users.some(u => u.id === userId)) {
+        try {
+          await store.createAuthUser(userId, name, undefined, avatarId)
+        } catch (err) {
+          log.error('invite', 'guest profile insert failed', err)
+          setError('Could not save your name — try again.')
+          return
+        }
+      }
+
+      const { calendarId, error: joinErr } = await joinAsGuest(code)
+      if (joinErr || !calendarId) {
+        setError(joinErr ?? 'Could not join the calendar.')
+        return
+      }
+
+      await auth.refreshApproval()          // picks up is_guest
+      store.setActiveUser(userId)
+      clearInviteFromUrl()
+      setPhase('done')
+      // Land inside the calendar the link is for — a guest has no other view.
+      await store.openCalendar(calendarId)
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   // Redeem the code against the existing session. redeem_invite joins the caller
   // to the calendar as PENDING — a valid QR gets you to the door, not through it.
@@ -149,7 +221,17 @@ export function useClaimScreenVM(onClose: () => void): ClaimScreenVM {
       // is a credential, and must never end up rendered beside their events.
       const handle = toDisplayHandle(username)
       const name   = inviteeName?.trim() || handle
-      await store.createAuthUser(userId, name, handle, avatarId)
+      try {
+        await store.createAuthUser(userId, name, handle, avatarId)
+      } catch (err) {
+        // The auth account and the redeemed invite both exist now, but the
+        // profile row did not land — the account can log in yet has no identity
+        // and can see nothing. Surface it instead of reaching 'done': a silent
+        // failure here is exactly the half-created account this guards against.
+        log.error('invite', 'profile row insert failed after sign-up', err)
+        setError('Your account was created but your profile could not be saved. Sign in and try again, or ask the administrator.')
+        return
+      }
 
       // The code is spent now. Drop it from the URL so a refresh — or a
       // screenshot of this very page — cannot reopen the claim flow.
@@ -163,6 +245,7 @@ export function useClaimScreenVM(onClose: () => void): ClaimScreenVM {
   return {
     phase, inviteeName, calendarName,
     joinOnly, join,
+    isGuestLink, guestName, setGuestName, guestBlocked, submitGuest,
     username, setUsername,
     password, setPassword,
     avatarId, setAvatarId,

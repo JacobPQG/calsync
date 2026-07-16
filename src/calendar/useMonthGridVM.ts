@@ -8,15 +8,17 @@
 // edit MonthGrid.view.tsx instead. If you're changing behavior (what counts as
 // a "best day", navigation, selection), edit here.
 
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   startOfMonth, endOfMonth, startOfWeek, endOfWeek,
   eachDayOfInterval, format, isSameMonth, isToday, parseISO,
 } from 'date-fns'
 import type { DaySummary, User } from '../types'
+import { isOverviewCalendar } from '../types'
 import { useStore }          from '../store/useStore'
 import { buildDaySummaries } from '../engine/recurrence'
 import { activityById }      from '../sports/activities'
+import { buildDayPollMarkers } from '../polls/pollLogic'
 
 // How many "best days" cards the ranking row shows.
 const RANKING_LIMIT = 10
@@ -36,6 +38,13 @@ export interface DayCellVM {
   // Unmatched anonymous events by other people. Renders as a de-identified
   // "somebody has something here" hint — never a name, time, or title.
   hiddenCount: number
+  // Poll marker (ADR-19): a rounded square drawn at the right of the cell when a
+  // poll has a slot on this day. Absent (null) when no poll touches the day.
+  poll: {
+    count:       number   // distinct open polls on this day
+    needsMyVote: boolean  // an open poll here I have not voted on
+    hasClosed:   boolean  // a decided poll whose winner is this day
+  } | null
 }
 
 // One "best days" ranking card.
@@ -62,6 +71,15 @@ export interface MonthGridVM {
   goNextMonth: () => void
   toggleDay:  (date: string) => void
   selectDay:  (date: string) => void
+
+  // Add-event modal, opened from the actions panel under the grid. False in the
+  // OVERVIEW — it aggregates several calendars, so a new event would have no
+  // single calendar to land in (the store's addEvent refuses too).
+  canAddEvents: boolean
+  showAddForm:  boolean
+  openAddForm:  () => void
+  closeAddForm: () => void
+  addFormDate:  string        // the selected day, or today when none is picked
 }
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
@@ -70,11 +88,14 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 export function useMonthGridVM(): MonthGridVM {
   const {
-    currentMonth, events, users, activeUserId,
+    currentMonth, events, users, activeUserId, polls,
     hiddenCounts, refreshHiddenCounts,
     selectedDate, setSelectedDate,
     navigateMonth, setCurrentMonth,
+    activeCalendarId,
   } = useStore()
+
+  const [showAddForm, setShowAddForm] = useState(false)
 
   // The visible 6-week window. Derived once — it also bounds the hidden-count
   // fetch, so the two always agree on which dates are on screen.
@@ -97,10 +118,18 @@ export function useMonthGridVM(): MonthGridVM {
     summaries: buildDaySummaries(events, users, start, end, activeUserId, hiddenCounts),
   }), [start, end, events, users, activeUserId, hiddenCounts])
 
+  // Poll markers per day, from the active user's point of view (which open polls
+  // still want their vote). Rebuilt only when the polls or the viewer change.
+  const pollMarkers = useMemo(
+    () => buildDayPollMarkers(polls, activeUserId),
+    [polls, activeUserId],
+  )
+
   // Resolve each grid day into a flat, render-ready cell.
   const cells = useMemo<DayCellVM[]>(() => days.map(day => {
     const date    = format(day, 'yyyy-MM-dd')
     const summary = summaries.get(date)
+    const marker  = pollMarkers.get(date)
     return {
       date,
       label:     format(day, 'd'),
@@ -111,8 +140,11 @@ export function useMonthGridVM(): MonthGridVM {
       users:     summary?.users ?? [],
       userCount: summary?.users.length ?? 0,
       hiddenCount: summary?.hiddenCount ?? 0,
+      poll: marker
+        ? { count: marker.pollCount, needsMyVote: marker.needsMyVote, hasClosed: marker.hasClosed }
+        : null,
     }
-  }), [days, summaries, currentMonth, selectedDate])
+  }), [days, summaries, pollMarkers, currentMonth, selectedDate])
 
   // "Best days": overlap first, then most users, then most events.
   // A day with nothing but withheld anonymous events still earns a card — the
@@ -143,6 +175,12 @@ export function useMonthGridVM(): MonthGridVM {
     goNextMonth: () => navigateMonth(1),
     toggleDay:   (date) => setSelectedDate(selectedDate === date ? null : date),
     selectDay:   (date) => setSelectedDate(date),
+
+    canAddEvents: !isOverviewCalendar(activeCalendarId),
+    showAddForm,
+    openAddForm:  () => setShowAddForm(true),
+    closeAddForm: () => setShowAddForm(false),
+    addFormDate:  selectedDate ?? format(new Date(), 'yyyy-MM-dd'),
   }
 }
 

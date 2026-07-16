@@ -86,26 +86,54 @@ export function DevPanel() {
               <>
                 <div className="h-px" style={{ background: 'var(--border)' }} />
 
+                {/* Whose SESSION this is — member or guest (ADR-18). */}
                 <div className="flex flex-col gap-2">
                   <span className="text-xs font-medium" style={{ color: 'var(--text-2)' }}>
-                    Act as
+                    Signed in as
                   </span>
-                  <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                    Switch persona to simulate several people in one browser —
-                    post as one, then another, and watch the overlap rules react.
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {vm.personas.map(p => (
-                      <button key={p.id} onClick={() => vm.setActiveUser(p.id)}
-                        className="rounded-full border text-xs px-2.5 py-1"
-                        style={p.id === vm.activeUserId
-                          ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-bg)' }
-                          : { borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
-                        {p.name}
-                      </button>
-                    ))}
-                  </div>
+
+                  <ModeOption
+                    active={vm.persona === 'member'}
+                    onClick={() => vm.setPersona('member')}
+                    title="Member — a full account"
+                    body="“You”: owns Team planning, belongs to Five-a-side, can create calendars and manage members." />
+
+                  <ModeOption
+                    active={vm.persona === 'guest'}
+                    onClick={() => vm.setPersona('guest')}
+                    title="Guest — joined without signing in"
+                    body="Gus came in through a guest link: one calendar only, no calendar creation, and signing out is permanent. Reproduces the whole guest experience." />
                 </div>
+
+                {/* A guest is exactly one person — the several-people trick
+                    belongs to the member persona, so it hides here rather than
+                    undermine the simulation. */}
+                {vm.persona === 'member' && (
+                  <>
+                    <div className="h-px" style={{ background: 'var(--border)' }} />
+
+                    <div className="flex flex-col gap-2">
+                      <span className="text-xs font-medium" style={{ color: 'var(--text-2)' }}>
+                        Act as
+                      </span>
+                      <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                        Switch persona to simulate several people in one browser —
+                        post as one, then another, and watch the overlap rules react.
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {vm.personas.map(p => (
+                          <button key={p.id} onClick={() => vm.setActiveUser(p.id)}
+                            className="rounded-full border text-xs px-2.5 py-1"
+                            style={p.id === vm.activeUserId
+                              ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-bg)' }
+                              : { borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+                            {p.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
 
                 <div className="h-px" style={{ background: 'var(--border)' }} />
 

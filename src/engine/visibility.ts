@@ -40,9 +40,19 @@ export function hoursOverlap(a: CalEvent, b: CalEvent): boolean {
  * Any event by another user counts as a coincidence — including another
  * unmatched anonymous one. Two people quietly free at the same hour is exactly
  * the case this feature exists to surface, so they reveal to each other.
+ *
+ * The match must be in the SAME CALENDAR. Calendars are the privacy boundary,
+ * and the overview view now feeds this function events from several calendars
+ * at once — without the check, an event in calendar A could unlock an
+ * anonymous one in calendar B. Mirrors event_has_coincidence() in
+ * db/schema/30_visibility.sql, which imposes the same rule; the two must stay
+ * in lockstep.
  */
 export function hasCoincidence(event: CalEvent, sameDay: EventInstance[]): boolean {
-  return sameDay.some(o => o.event.userId !== event.userId && hoursOverlap(o.event, event))
+  return sameDay.some(o =>
+    o.event.userId !== event.userId
+    && o.event.calendarId === event.calendarId
+    && hoursOverlap(o.event, event))
 }
 
 /**
@@ -101,6 +111,10 @@ export function visibleEvents(
     if (event.userId === viewerId) return true
     if (isPublic(event))           return true
     const sameDay = byDate.get(event.date) ?? []
-    return sameDay.some(o => o.userId !== event.userId && hoursOverlap(o, event))
+    // Same-calendar only, like hasCoincidence above and the RLS policy.
+    return sameDay.some(o =>
+      o.userId !== event.userId
+      && o.calendarId === event.calendarId
+      && hoursOverlap(o, event))
   })
 }

@@ -8,6 +8,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { IS_SANDBOX } from '../dev/devMode'
+import { IS_DEMO } from '../demo/demoMode'
 
 const url = import.meta.env.VITE_SUPABASE_URL  as string | undefined
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
@@ -18,7 +19,12 @@ const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
 // credentials ARE configured, which is what puts the whole app on the
 // localStorage path: no client, no auth, no RLS, no server to refuse anything.
 // It is not a bypass of Supabase's rules — it is the absence of Supabase.
-export const SUPABASE_ENABLED = !!(url && key) && !IS_SANDBOX
+//
+// Demo mode (the public landing page — see demo/demoMode.ts) forces it false
+// for the same reason, except its no-server data lives in memory, not
+// localStorage: the boundaries (storage / calendarService / pollService) each
+// branch to the demo fixture before their localStorage fallback.
+export const SUPABASE_ENABLED = !!(url && key) && !IS_SANDBOX && !IS_DEMO
 
 // The cast is safe because every caller guards with SUPABASE_ENABLED first.
 // Using `null as unknown as …` rather than a conditional export keeps

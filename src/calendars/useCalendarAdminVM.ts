@@ -21,11 +21,12 @@ import {
 } from './calendarService'
 import {
   mintCalendarInvites, listCalendarInvites, revokeInvite,
-  type MintedInvite, type CalendarInviteRecord,
+  mintGuestLink, getGuestLink,
+  type MintedInvite, type CalendarInviteRecord, type GuestLink,
 } from '../invite/inviteService'
 import { buildInviteUrl } from '../invite/inviteLink'
 import {
-  INVITE_LIFETIME_HOURS, INVITE_LIFETIME_OPTIONS,
+  INVITE_LIFETIME_HOURS, INVITE_LIFETIME_OPTIONS, GUEST_LINK_LIFETIME_HOURS,
   MIN_CALENDAR_SEATS, MAX_CALENDAR_SEATS, MAX_BULK_INVITES,
 } from '../lib/config'
 
@@ -72,6 +73,17 @@ export interface CalendarAdminVM {
   revoke:  (code: string) => Promise<void>
   copyUrl: (code: string) => Promise<void>
   copied:  string | null
+
+  // ── Guest link (ADR-18) ───────────────────────────────────────────────────
+  // ONE shared, multi-use link for the whole group chat. Anyone opening it joins
+  // as a passwordless GUEST — no approval step, but every join takes a seat
+  // under the cap, and the owner can revoke the link or remove guests any time.
+  guestLink:         GuestLink | null       // the live link, if any
+  guestLifetime:     number | null; setGuestLifetime: (v: number | null) => void
+  mintingGuestLink:  boolean
+  createGuestLink:   () => Promise<void>    // mints, or ROTATES the existing one
+  revokeGuestLink:   () => Promise<void>
+  copyGuestLink:     () => Promise<void>
 
   // ── Settings ──────────────────────────────────────────────────────────────
   name:  string; setName:  (v: string) => void
@@ -124,6 +136,10 @@ export function useCalendarAdminVM(calendarId: string): CalendarAdminVM {
   const [fresh,         setFresh]         = useState<MintedInvite[]>([])
   const [copied,        setCopied]        = useState<string | null>(null)
 
+  const [guestLink,        setGuestLink]        = useState<GuestLink | null>(null)
+  const [guestLifetime,    setGuestLifetime]    = useState<number | null>(GUEST_LINK_LIFETIME_HOURS)
+  const [mintingGuestLink, setMintingGuestLink] = useState(false)
+
   const [name,          setName]          = useState('')
   const [seats,         setSeats]         = useState<number | null>(null)
   const [features,      setFeatures]      = useState<CalendarFeatures>(NO_FEATURES)
@@ -133,15 +149,17 @@ export function useCalendarAdminVM(calendarId: string): CalendarAdminVM {
 
   const refresh = useCallback(async () => {
     setLoading(true)
-    const [cals, mem, inv] = await Promise.all([
+    const [cals, mem, inv, guest] = await Promise.all([
       listCalendars(),
       listMembers(calendarId),
       listCalendarInvites(calendarId),
+      getGuestLink(calendarId),
     ])
     const cal = cals.find(c => c.id === calendarId) ?? null
     setCalendar(cal)
     setMembers(mem)
     setInvites(inv)
+    setGuestLink(guest)
     // Seed the settings form from the server's copy, so it always opens showing
     // what is actually stored rather than whatever was last typed.
     if (cal) { setName(cal.name); setSeats(cal.maxMembers); setFeatures(cal.features) }
@@ -229,6 +247,40 @@ export function useCalendarAdminVM(calendarId: string): CalendarAdminVM {
     }
   }
 
+  // ── Guest link ──────────────────────────────────────────────────────────────
+
+  // Minting when a link already exists ROTATES it (the server deactivates the
+  // old one) — sharing a fresh link and cutting off the old one are one action.
+  async function createGuestLink() {
+    setError(null)
+    setMintingGuestLink(true)
+    try {
+      const { link, error: errMsg } = await mintGuestLink(calendarId, guestLifetime)
+      if (errMsg || !link) {
+        setError(errMsg ?? 'Could not create the guest link.')
+        return
+      }
+      setGuestLink(link)
+    } finally {
+      setMintingGuestLink(false)
+    }
+  }
+
+  // Kills the link only — guests who already joined keep their membership until
+  // the owner removes them from the roster.
+  async function revokeGuestLink() {
+    if (!guestLink) return
+    setError(null)
+    const errMsg = await revokeInvite(guestLink.code)
+    if (errMsg) { setError(errMsg); return }
+    setGuestLink(null)
+  }
+
+  async function copyGuestLink() {
+    if (!guestLink) return
+    await copyUrl(guestLink.code)
+  }
+
   // ── Settings ────────────────────────────────────────────────────────────────
 
   async function save() {
@@ -305,6 +357,11 @@ export function useCalendarAdminVM(calendarId: string): CalendarAdminVM {
     dismissFresh: () => setFresh([]),
 
     mint, invites, revoke, copyUrl, copied,
+
+    guestLink,
+    guestLifetime, setGuestLifetime,
+    mintingGuestLink,
+    createGuestLink, revokeGuestLink, copyGuestLink,
 
     name, setName,
     seats, setSeats,

@@ -110,16 +110,13 @@ export interface DayViewVM {
   openEvent:    (i: EventInstance) => void
   closeEvent:   () => void
 
-  // Add / edit form state.
-  showAddForm:   boolean
-  openAddForm:  () => void
-  closeAddForm: () => void
+  // Edit form state. (ADDING events lives in the actions panel below the month
+  // grid — see useMonthGridVM — not here; this panel only edits what it shows.)
   editingEvent:  CalEvent | null
   openEdit:     (e: CalEvent) => void
   closeEdit:    () => void
 
   deleteActiveEvent: () => void
-  selectedDate: string | null      // passed to the add form
 }
 
 export function useDayViewVM(): DayViewVM {
@@ -127,7 +124,6 @@ export function useDayViewVM(): DayViewVM {
     selectedDate, events, users, activeUserId, hiddenCounts, deleteEvent,
   } = useStore()
 
-  const [showAddForm,  setShowAddForm]  = useState(false)
   const [activeEvent,  setActiveEvent]  = useState<EventInstance | null>(null)
   const [editingEvent, setEditingEvent] = useState<CalEvent | null>(null)
 
@@ -160,9 +156,6 @@ export function useDayViewVM(): DayViewVM {
     openEvent:  setActiveEvent,
     closeEvent: () => setActiveEvent(null),
 
-    showAddForm,
-    openAddForm:  () => setShowAddForm(true),
-    closeAddForm: () => setShowAddForm(false),
     editingEvent,
     openEdit:  setEditingEvent,
     closeEdit: () => setEditingEvent(null),
@@ -170,7 +163,6 @@ export function useDayViewVM(): DayViewVM {
     deleteActiveEvent: () => {
       if (activeEvent) { deleteEvent(activeEvent.event.id); setActiveEvent(null) }
     },
-    selectedDate,
   }
 }
 
@@ -226,6 +218,15 @@ export interface EventDetailVM {
   eventUrl:     string | null
   recurrenceLabel: string | null // "Weekly · until 2026-08-01", or null
 
+  // Which calendar this event lives in, and the jump to it. The name resolves
+  // from the store's calendar list (null while that is in flight, or for a
+  // calendar the viewer has since left). `canSwitchToSource` is true when the
+  // event's calendar is NOT the one being viewed — i.e. in the overview — so a
+  // calendar's own day view doesn't grow a button to where you already are.
+  sourceCalendarName: string | null
+  canSwitchToSource:  boolean
+  openSourceCalendar: () => void
+
   // Visibility, explained in the owner's own terms. Non-owners never see this —
   // by the time they can open an event it is public or already matched, so the
   // badge would tell them nothing.
@@ -237,7 +238,10 @@ export interface EventDetailVM {
  * the store so a just-recorded result shows without re-selecting the day.
  */
 export function useEventDetailVM(instance: EventInstance): EventDetailVM {
-  const { activeUserId, users, events, features } = useStore()
+  const {
+    activeUserId, users, events, features,
+    calendars, activeCalendarId, openCalendar,
+  } = useStore()
   const liveEvent = useStore(s => s.events.find(e => e.id === instance.event.id))
 
   const { user, date } = instance
@@ -301,6 +305,11 @@ export function useEventDetailVM(instance: EventInstance): EventDetailVM {
       + (event.recurring.endDate ? ` · until ${event.recurring.endDate}` : '')
     : null
 
+  // The event's source calendar. Every event carries its real calendarId even
+  // in the overview — that is what makes the jump possible.
+  const sourceCalendarName =
+    calendars.find(c => c.id === event.calendarId)?.name ?? null
+
   return {
     event,
     color,
@@ -320,6 +329,9 @@ export function useEventDetailVM(instance: EventInstance): EventDetailVM {
     mapsUrl:  safeUrl(rawMapsUrl),
     eventUrl: safeUrl(event.eventUrl),
     recurrenceLabel,
+    sourceCalendarName,
+    canSwitchToSource:  event.calendarId !== activeCalendarId,
+    openSourceCalendar: () => { openCalendar(event.calendarId) },
     visibilityBadge,
   }
 }

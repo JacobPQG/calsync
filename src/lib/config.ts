@@ -56,6 +56,13 @@ export const INVITE_LIFETIME_OPTIONS: { label: string; hours: number | null }[] 
   { label: 'Never',    hours: null },
 ]
 
+// How long a freshly minted GUEST LINK stays joinable (ADR-18). Longer than the
+// personal-invite default on purpose: a group link sits in a chat thread that
+// people get to over days, not minutes. Mirrors mint_guest_link()'s default; the
+// owner can pick another lifetime in the form, and the server enforces it.
+export const GUEST_LINK_LIFETIME_HOURS: number =
+  Number(import.meta.env.VITE_GUEST_LINK_LIFETIME_HOURS) || 168
+
 // Hard cap on events accepted from a single .ics import.
 export const MAX_ICAL_IMPORT = 200
 

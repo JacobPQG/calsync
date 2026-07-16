@@ -36,10 +36,16 @@ export interface InviteLookup {
   // live invite — a spent or expired code says nothing about where it led.
   calendarId:   string | null
   calendarName: string | null
+
+  // A GUEST LINK (ADR-18): multi-use, shared with a group. The claim screen
+  // renders a different form for it — display name + icon, no password, no
+  // username — and joins via join_as_guest instead of signUp/redeem.
+  isGuestLink: boolean
 }
 
 const UNAVAILABLE: InviteLookup = {
   status: 'unavailable', inviteeName: null, calendarId: null, calendarName: null,
+  isGuestLink: false,
 }
 
 // Ask the server what this code is. Called on page load when #invite= is present.
@@ -63,6 +69,7 @@ export async function lookupInvite(code: string): Promise<InviteLookup> {
     invitee_name:  string | null
     calendar_id:   string | null
     calendar_name: string | null
+    guest:         boolean | null
   }[] | null)?.[0]
   if (!row) return UNAVAILABLE
 
@@ -75,6 +82,7 @@ export async function lookupInvite(code: string): Promise<InviteLookup> {
     inviteeName:  row.invitee_name  ?? null,
     calendarId:   row.calendar_id   ?? null,
     calendarName: row.calendar_name ?? null,
+    isGuestLink:  row.guest === true,
   }
 }
 
@@ -313,6 +321,92 @@ export async function redeemInvite(code: string): Promise<string | null> {
   return null
 }
 
+// ═══ Guest links (ADR-18) ═════════════════════════════════════════════════════
+// One MULTI-USE link per calendar, for the Doodle / WhatsApp-group case: whoever
+// opens it joins as a passwordless GUEST, immediately, seat cap permitting. The
+// deliberate exceptions and their containment (expiry, revocation, per-join seat
+// cap, guests' reduced reach) live in db/schema/50_invites.sql — not here.
+
+// The calendar's live guest link, as its owner sees it in the Manage panel.
+export interface GuestLink {
+  code:      string
+  url:       string
+  createdAt: string
+  expiresAt: string | null
+  useCount:  number       // how many guests joined through it
+}
+
+// Mint (or ROTATE — the server deactivates the previous one) the guest link.
+export async function mintGuestLink(
+  calendarId:    string,
+  lifetimeHours: number | null,
+): Promise<{ link: GuestLink | null; error: string | null }> {
+  if (!SUPABASE_ENABLED) {
+    return { link: null, error: 'Supabase is not configured (see .env.example).' }
+  }
+
+  const { data, error } = await supabase.rpc('mint_guest_link', {
+    cal_id: calendarId, lifetime_hours: lifetimeHours,
+  })
+  if (error) {
+    log.error('invite', 'mint_guest_link failed', error.message)
+    return { link: null, error: friendlyInviteError(error.message) }
+  }
+  if (typeof data !== 'string' || data.length === 0) {
+    return { link: null, error: 'The server did not return a guest link.' }
+  }
+  // Re-read rather than assemble locally, so expiry/counters come from the
+  // server's copy — the one the link will actually be judged against.
+  return { link: await getGuestLink(calendarId), error: null }
+}
+
+// The calendar's current live guest link, or null if none. Owner-only
+// server-side; anyone else simply gets no row.
+export async function getGuestLink(calendarId: string): Promise<GuestLink | null> {
+  if (!SUPABASE_ENABLED) return null
+
+  const { data, error } = await supabase.rpc('get_guest_link', { cal_id: calendarId })
+  if (error) {
+    log.error('invite', `get_guest_link failed (cal=${calendarId})`, error.message)
+    return null
+  }
+
+  const row = (data as {
+    code: string; created_at: string; expires_at: string | null; use_count: number
+  }[] | null)?.[0]
+  if (!row?.code) return null
+
+  return {
+    code:      row.code,
+    url:       buildInviteUrl(row.code),
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    useCount:  Number(row.use_count),
+  }
+}
+
+// Join a calendar through its guest link. The caller must already hold an
+// ANONYMOUS session (auth.signInAnonymously) and have inserted their own profile
+// row — the server verifies both, flags the account is_guest, and takes a seat
+// under the cap. Returns the joined calendar's id.
+export async function joinAsGuest(
+  code: string,
+): Promise<{ calendarId: string | null; error: string | null }> {
+  if (!SUPABASE_ENABLED) {
+    return { calendarId: null, error: 'Supabase is not configured (see .env.example).' }
+  }
+
+  const { data, error } = await supabase.rpc('join_as_guest', { invite: code })
+  if (error) {
+    log.error('invite', 'join_as_guest failed', error.message)
+    return { calendarId: null, error: friendlyInviteError(error.message) }
+  }
+  if (typeof data !== 'string' || data.length === 0) {
+    return { calendarId: null, error: 'Joining did not return a calendar.' }
+  }
+  return { calendarId: data, error: null }
+}
+
 // ── Confirming a claim ────────────────────────────────────────────────────────
 // These flip users.approved, which is the flag RLS has always gated on. They are
 // the in-app equivalent of editing it in the Supabase Dashboard — not a new
@@ -352,5 +446,8 @@ function friendlyInviteError(raw: string): string {
   if (/administrator/i.test(raw))                 return 'Only an administrator may do that.'
   if (/invitee name|invite lifetime/i.test(raw))  return raw
   if (/at least one person|at most 100/i.test(raw)) return raw
+  // Guest-link refusals (ADR-18) are written for humans and carry the fact that
+  // explains them — "full (8 of 8 seats)", "not valid any more" — so they pass.
+  if (/is full|guest link|guest session|guest accounts cannot/i.test(raw)) return raw
   return 'That did not work — try again.'
 }

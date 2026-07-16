@@ -62,6 +62,23 @@ export function isSportsCalendar(f: CalendarFeatures | null | undefined): boolea
   return !!f && (f.scores || f.leaderboard || f.challenges)
 }
 
+// ── The overview (virtual calendar) ──────────────────────────────────────────
+// The one place a user can see every event they are part of, across all of
+// their calendars at once. It is NOT a calendar row: nothing is stored under
+// this id, no event may belong to it, and it has no members or owner. It is a
+// read-only aggregation of the calendars the user is an approved member of —
+// each of which remains its own privacy boundary (coincidence never crosses
+// calendars; see engine/visibility.ts and db/schema/30_visibility.sql).
+//
+// The sentinel deliberately cannot collide with a real id: calendar ids are
+// nanoids, which never contain ':'.
+
+export const OVERVIEW_CALENDAR_ID = 'calsync:overview'
+
+export function isOverviewCalendar(calendarId: string | null): boolean {
+  return calendarId === OVERVIEW_CALENDAR_ID
+}
+
 // 'pending' — claimed an invite, but the owner has not confirmed them. The
 //   membership exists and grants NOTHING: RLS returns no other member's events.
 // 'approved' — confirmed. This is the sharing grant.
@@ -76,6 +93,10 @@ export interface CalendarMember {
   invitedAs: string | null      // the name the owner typed when minting the invite
   joinedAt:  string
   isOwner:   boolean
+  // Joined through the calendar's GUEST LINK (ADR-18): passwordless and
+  // temporary. Removing a guest deletes their account and events — the roster
+  // badges them so the owner knows which removals are which.
+  isGuest:   boolean
 }
 
 export type FrequencyType = 'none' | 'daily' | 'weekly' | 'monthly' | 'custom'
@@ -147,6 +168,54 @@ export interface CalEvent {
   activity?: string       // sports variant: id from sports/activities.ts
   result?: MatchResult    // sports variant: recorded score
   createdAt: string
+}
+
+// ── Polls (ADR-19) ────────────────────────────────────────────────────────────
+// A Doodle-style time poll: a member proposes several candidate slots, and every
+// approved member of the calendar marks their availability per slot. The winning
+// slot can be turned into a real event when the poll is closed.
+//
+// This is a DELIBERATE departure from event anonymity. An event is private by
+// default and revealed only on genuine coincidence; a poll vote is the OPPOSITE —
+// an explicit, attributed "I'm free then / I'm not" declaration to the whole
+// calendar. That is what a scheduling poll is for, so polls get their own tables
+// with a plain member-read policy rather than riding the visibility engine.
+
+// How a member marked one candidate slot. Ordered best→worst so a tally can rank.
+export type PollVoteValue = 'yes' | 'maybe' | 'no'
+
+// One candidate slot in a poll. Same date/hour shape as an event's slot, so the
+// winning option maps straight onto a CalEvent when the poll is closed.
+export interface PollOption {
+  id:        string
+  date:      string   // ISO date (YYYY-MM-DD)
+  startHour: number   // 0–23
+  endHour:   number   // 1–24
+}
+
+// One member's mark on one option. userId is pinned server-side to the caller —
+// a client can never cast a vote as someone else.
+export interface PollVote {
+  optionId: string
+  userId:   string
+  value:    PollVoteValue
+}
+
+export type PollStatus = 'open' | 'closed'
+
+export interface Poll {
+  id:          string
+  calendarId:  string
+  createdBy:   string          // user id of the member who opened the poll
+  title:       string
+  status:      PollStatus
+  options:     PollOption[]
+  votes:       PollVote[]       // every member's votes across all options
+  // Set when the poll is closed: the option that won. If an event was spawned
+  // from it, chosenEventId points at that CalEvent.
+  chosenOptionId: string | null
+  chosenEventId:  string | null
+  createdAt:   string
 }
 
 // An expanded event instance for a specific date (after recurrence expansion)

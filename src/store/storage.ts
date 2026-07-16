@@ -24,7 +24,20 @@
 
 import type { User, CalEvent } from '../types'
 import { supabase, SUPABASE_ENABLED } from '../lib/supabase'
+import { IS_DEMO } from '../demo/demoMode'
+import * as demo from '../demo/demoWorld'
 import { log } from '../lib/log'
+
+// Raised when a write the caller must not silently lose fails. saveUser throws
+// this instead of only logging: a dropped profile insert during sign-up leaves
+// an auth account with no users row — a login that can never see anything — and
+// the sign-up flow must be able to surface that rather than report success.
+export class StorageError extends Error {
+  constructor(message: string, readonly cause?: unknown) {
+    super(message)
+    this.name = 'StorageError'
+  }
+}
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 
@@ -49,17 +62,25 @@ function lsWrite(key: string, value: unknown) {
 // ── Active user ID ─────────────────────────────────────────────────────────────
 // Synchronous — always localStorage, regardless of backend.
 
+// Demo mode branches FIRST throughout this file: it is the in-memory backend,
+// and must never fall through to localStorage (which persists — the demo
+// promises nothing does) or to Supabase (which SUPABASE_ENABLED already rules
+// out; demo forces it false).
+
 export function loadActiveUserId(): string | null {
+  if (IS_DEMO) return demo.dmActiveUserId()
   return lsRead<string | null>(LS.activeUser, null)
 }
 
 export function saveActiveUserId(id: string | null): void {
+  if (IS_DEMO) { demo.dmSetActiveUserId(id); return }
   lsWrite(LS.activeUser, id)
 }
 
 // ── Users ─────────────────────────────────────────────────────────────────────
 
 export async function loadUsers(): Promise<User[]> {
+  if (IS_DEMO) return demo.dmUsers()
   if (!SUPABASE_ENABLED) return lsRead<User[]>(LS.users, [])
 
   const { data, error } = await supabase.from('users').select('data')
@@ -71,6 +92,7 @@ export async function loadUsers(): Promise<User[]> {
 // profile row is first created after sign-up — the DB column is unique and
 // used by the admin to identify who redeemed which invite code.
 export async function saveUser(user: User, username?: string): Promise<void> {
+  if (IS_DEMO) { demo.dmSaveUser(user); return }
   if (!SUPABASE_ENABLED) {
     const all = lsRead<User[]>(LS.users, [])
     lsWrite(LS.users, [...all.filter(u => u.id !== user.id), user])
@@ -80,7 +102,10 @@ export async function saveUser(user: User, username?: string): Promise<void> {
     ? { id: user.id, data: user, username }
     : { id: user.id, data: user }
   const { error } = await supabase.from('users').upsert(row)
-  if (error) log.error('storage', `saveUser failed (id=${user.id}):`, error.message)
+  if (error) {
+    log.error('storage', `saveUser failed (id=${user.id}):`, error.message)
+    throw new StorageError(`Could not save your profile: ${error.message}`, error)
+  }
 }
 
 // ── Local-only personas (test mode) ──────────────────────────────────────────
@@ -129,6 +154,7 @@ export function loadLocalEvents(calendarId: string): CalEvent[] {
 }
 
 export async function removeUser(id: string): Promise<void> {
+  if (IS_DEMO) { demo.dmRemoveUser(id); return }
   if (!SUPABASE_ENABLED) {
     lsWrite(LS.users, lsRead<User[]>(LS.users, []).filter(u => u.id !== id))
     return
@@ -151,6 +177,7 @@ export async function removeUser(id: string): Promise<void> {
 // the client at all. Asking for a calendar you are not a member of returns zero
 // rows — not an error, and not anyone's data. See db/schema/70_policies.sql.
 export async function loadEvents(calendarId: string): Promise<CalEvent[]> {
+  if (IS_DEMO) return demo.dmEvents(calendarId)
   if (!SUPABASE_ENABLED) {
     return lsRead<CalEvent[]>(LS.events, []).filter(e => e.calendarId === calendarId)
   }
@@ -162,6 +189,38 @@ export async function loadEvents(calendarId: string): Promise<CalEvent[]> {
     return []
   }
   return data.map(r => r.data as CalEvent)
+}
+
+// Events for SEVERAL calendars in one round trip — the overview (the virtual
+// "everything I am part of" view). Not a loosening of ADR-12: each id in the
+// list is still its own privacy boundary (the client visibility engine judges
+// coincidence per calendar), and RLS still decides row by row what comes back.
+// An id the caller is not a member of contributes zero rows, not an error.
+export async function loadEventsForCalendars(calendarIds: string[]): Promise<CalEvent[]> {
+  if (calendarIds.length === 0) return []
+  if (IS_DEMO) return demo.dmEventsForCalendars(calendarIds)
+  if (!SUPABASE_ENABLED) {
+    const wanted = new Set(calendarIds)
+    return lsRead<CalEvent[]>(LS.events, []).filter(e => wanted.has(e.calendarId))
+  }
+
+  const { data, error } = await supabase
+    .from('events').select('data').in('calendar_id', calendarIds)
+  if (error) {
+    log.error('storage', `loadEventsForCalendars failed (${calendarIds.length} calendars):`, error.message)
+    return []
+  }
+  return data.map(r => r.data as CalEvent)
+}
+
+// Local-only personas' events across several calendars (test mode; see
+// loadLocalEvents above for the single-calendar case).
+export function loadLocalEventsForCalendars(calendarIds: string[]): CalEvent[] {
+  const ids = loadLocalIds()
+  if (ids.size === 0 || calendarIds.length === 0) return []
+  const wanted = new Set(calendarIds)
+  return lsRead<CalEvent[]>(LS.events, [])
+    .filter(e => ids.has(e.userId) && wanted.has(e.calendarId))
 }
 
 // Per-date counts of anonymous events being withheld from us — the "someone has
@@ -204,10 +263,14 @@ function saveEventLocal(event: CalEvent): void {
 //
 // Events owned by a local-only persona (test mode) always go to localStorage,
 // never to Supabase — they'd fail RLS and don't belong in a real deployment.
-export async function saveEvent(event: CalEvent): Promise<void> {
+//
+// Returns an error message (or null on success) so the store can ROLL BACK its
+// optimistic update — a write RLS rejects must not stay on screen as if saved.
+export async function saveEvent(event: CalEvent): Promise<string | null> {
+  if (IS_DEMO) { demo.dmSaveEvent(event); return null }
   if (!SUPABASE_ENABLED || isLocalUser(event.userId)) {
     saveEventLocal(event)
-    return
+    return null
   }
   const { error } = await supabase.from('events').upsert({
     id:          event.id,
@@ -215,20 +278,30 @@ export async function saveEvent(event: CalEvent): Promise<void> {
     calendar_id: event.calendarId,
     data:        event,
   })
-  if (error) log.error('storage', `saveEvent failed (id=${event.id}):`, error.message)
+  if (error) {
+    log.error('storage', `saveEvent failed (id=${event.id}):`, error.message)
+    return error.message
+  }
+  return null
 }
 
-export async function removeEvent(id: string): Promise<void> {
+// Returns an error message (or null on success), same contract as saveEvent.
+export async function removeEvent(id: string): Promise<string | null> {
+  if (IS_DEMO) { demo.dmRemoveEvent(id); return null }
   // Always clear the local copy (harmless if absent); this also covers events
   // owned by a local-only persona in Supabase mode.
   const localAll = lsRead<CalEvent[]>(LS.events, [])
   const wasLocal = localAll.some(e => e.id === id)
   if (wasLocal) lsWrite(LS.events, localAll.filter(e => e.id !== id))
 
-  if (!SUPABASE_ENABLED || wasLocal) return
+  if (!SUPABASE_ENABLED || wasLocal) return null
 
   const { error } = await supabase.from('events').delete().eq('id', id)
-  if (error) log.error('storage', `removeEvent failed (id=${id}):`, error.message)
+  if (error) {
+    log.error('storage', `removeEvent failed (id=${id}):`, error.message)
+    return error.message
+  }
+  return null
 }
 
 // ── Sharing ───────────────────────────────────────────────────────────────────

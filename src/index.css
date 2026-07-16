@@ -20,7 +20,9 @@
 
   --text:           #e8e4db;
   --text-2:         #9e9a91;
-  --text-muted:     #635f57;
+  /* 4.78:1 on --bg-surface — the smallest text in the app uses this token, so it
+     must clear WCAG AA (4.5:1); the old #635f57 measured 2.76. */
+  --text-muted:     #8a857a;
 
   --accent:         #8077f5;   /* slightly lighter for dark bg readability */
   --accent-bg:      #1d1944;
@@ -32,6 +34,12 @@
   --overlap-bg:     #0b1f11;
   --overlap-border: #1a4a27;
   --overlap-text:   #4ade80;
+
+  /* Poll marker (ADR-19). Its own hue so a poll never reads as a user or overlap. */
+  --poll:           #e0a63a;
+  --poll-bg:        #2a1f0a;
+  --poll-border:    #5c4416;
+  --poll-text:      #f0c46a;
 
   --danger:         #f87171;
   --danger-bg:      #2a1414;
@@ -59,7 +67,8 @@
 
   --text:           #1a1917;
   --text-2:         #6b6863;
-  --text-muted:     #a09d98;
+  /* 5.37:1 on white — same WCAG AA reasoning as the dark theme's token. */
+  --text-muted:     #6e6a64;
 
   --accent:         #5046e5;
   --accent-bg:      #ede9fe;
@@ -71,6 +80,12 @@
   --overlap-bg:     #f0fdf4;
   --overlap-border: #a7f3d0;
   --overlap-text:   #166534;
+
+  /* Poll marker (ADR-19), light theme. */
+  --poll:           #b8801a;
+  --poll-bg:        #fdf6e3;
+  --poll-border:    #ecd8a0;
+  --poll-text:      #92600f;
 
   --danger:         #dc2626;
   --danger-bg:      #fff5f5;
@@ -115,6 +130,11 @@ html, body, #root {
   padding-right: env(safe-area-inset-right);
 }
 .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+
+/* Demo mode: the app shell rendered INSIDE the landing page's demo frame
+   (landing/LandingPage.view.tsx). The frame owns the height; the shell fills
+   it instead of claiming the viewport like .app-shell does. */
+.demo-embed { height: 100%; }
 
 /* iOS Safari zooms the page when a focused input has font-size < 16px.
    On small screens promote all form fields to 16px to keep the layout put. */

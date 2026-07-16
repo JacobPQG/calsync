@@ -25,10 +25,18 @@ interface Props {
   onOpen:  (calendarId: string) => void
   // Open a calendar's admin panel. Only ever offered for calendars you own.
   onAdmin: (calendarId: string) => void
+  // Open the OVERVIEW — every event you are part of, across all your calendars.
+  onOpenOverview: () => void
 }
 
-export function HomeView({ onOpen, onAdmin }: Props) {
+export function HomeView({ onOpen, onAdmin, onOpenOverview }: Props) {
   const vm = useHomeVM()
+
+  // The overview only makes sense once there is at least one calendar to
+  // aggregate. Owned calendars always count (the owner is an approved member of
+  // their own); a joined one counts only once its owner has approved you.
+  const hasOverviewContent =
+    vm.owned.length > 0 || vm.joined.some(c => c.myStatus === 'approved')
 
   return (
     <div className="flex-1 overflow-y-auto" style={{ background: 'var(--bg-base)' }}>
@@ -40,6 +48,31 @@ export function HomeView({ onOpen, onAdmin }: Props) {
             style={{ background: 'var(--warning-bg)', color: 'var(--warning)' }}>
             {vm.error}
           </div>
+        )}
+
+        {/* ── All my events (the overview) ─────────────────────────────── */}
+        {/* First and centered: this is the default place to look — one grid
+            with everything you are part of, kept live as the calendars below
+            change. Opening a specific calendar is the step after. */}
+        {!vm.loading && hasOverviewContent && (
+          <section className="flex justify-center">
+            <button onClick={onOpenOverview}
+              className="w-full rounded-xl flex flex-col items-center gap-1 py-5 px-4 text-center transition-opacity hover:opacity-90"
+              style={{
+                maxWidth: 520,
+                background: 'var(--accent-bg)',
+                border: '0.5px solid var(--accent)',
+              }}
+              title="One calendar with every event you are part of">
+              <span className="text-base font-semibold" style={{ color: 'var(--accent)' }}>
+                👁 All my events
+              </span>
+              <span className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                Every event you are part of, across all your calendars —
+                updated live as they change.
+              </span>
+            </button>
+          </section>
         )}
 
         {/* ── My calendars ─────────────────────────────────────────────── */}

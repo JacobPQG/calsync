@@ -18,6 +18,8 @@ import {
 import { useAuthSession } from '../auth/useAuth'
 import { SUPABASE_ENABLED } from '../lib/supabase'
 import { IS_SANDBOX } from '../dev/devMode'
+import { IS_DEMO } from '../demo/demoMode'
+import { DEMO_READONLY } from '../demo/demoWorld'
 import { DEFAULT_CALENDAR_SEATS } from '../lib/config'
 
 export interface HomeVM {
@@ -87,10 +89,22 @@ export function useHomeVM(): HomeVM {
   // Mirrors the server's own preconditions for create_calendar. Kept in this
   // order because "you are not signed in" explains "you are not approved".
   //
-  // The sandbox is exempt: it has no auth and no server, and creating calendars
-  // is the main thing it exists to let you do. See dev/devMode.ts.
+  // The guest branch leads, even past the sandbox exemption: a guest may not
+  // create calendars (ADR-18), and the sandbox's guest persona must be told so
+  // in the same words a real guest would be. It also stays ahead of the
+  // approval branch — a guest is unapproved too, but "awaiting approval" would
+  // promise an approval that is never coming.
+  //
+  // The sandbox is otherwise exempt: it has no auth and no server, and creating
+  // calendars is the main thing it exists to let you do. See dev/devMode.ts.
+  // The demo branch sits before the no-backend one: demo mode forces
+  // SUPABASE_ENABLED false, and "configure Supabase" would be the wrong story
+  // to tell a landing-page visitor of a fully configured deployment.
   const createBlockedReason: string | null =
-    IS_SANDBOX            ? null
+    auth.isGuest
+      ? 'Guest access is limited to the calendar you were invited to — creating calendars needs a full account.'
+    : IS_SANDBOX            ? null
+    : IS_DEMO               ? DEMO_READONLY
     : !SUPABASE_ENABLED     ? 'Calendars need a Supabase backend (see .env.example).'
     : !auth.isAuthenticated ? 'Sign in to create a calendar.'
     : auth.approved === false

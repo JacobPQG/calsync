@@ -18,11 +18,19 @@ import { nanoid } from 'nanoid'
 import { supabase, SUPABASE_ENABLED } from '../lib/supabase'
 import { log } from '../lib/log'
 import { IS_SANDBOX } from '../dev/devMode'
+import { IS_DEMO } from '../demo/demoMode'
+import { dmListCalendars, dmListMembers, DEMO_READONLY } from '../demo/demoWorld'
 import { useStore } from '../store/useStore'
 import type { Calendar, CalendarFeatures, CalendarMember, MemberStatus } from '../types'
 import { NO_FEATURES } from '../types'
 
 const NO_BACKEND = 'Calendars need a Supabase backend (see .env.example).'
+
+// Demo mode (the public landing page — see demo/demoMode.ts) serves the reads
+// from a fixed in-memory fixture and REFUSES every calendar write: managing
+// calendars (invites, approvals, seats) is server territory, and the demo's
+// point is events and polls. Checked before the sandbox so the two fixtures
+// can never mix (demoMode already yields to the sandbox when both could apply).
 
 // Sandbox mode (local dev only) substitutes a localStorage implementation for
 // every function below, so the calendar UI can be driven with no server. It is a
@@ -67,6 +75,7 @@ interface MemberRow {
   invited_as: string | null
   joined_at:  string
   is_owner:   boolean
+  is_guest:   boolean | null
 }
 
 // Anything the server doesn't recognise collapses to 'pending' — fail closed.
@@ -118,6 +127,9 @@ function toMember(r: MemberRow): CalendarMember {
     invitedAs: r.invited_as,
     joinedAt:  r.joined_at,
     isOwner:   r.is_owner,
+    // Only a literal true counts — a guest badge (and the "removal deletes the
+    // account" copy it drives) must never appear on a real account by accident.
+    isGuest:   r.is_guest === true,
   }
 }
 
@@ -125,6 +137,7 @@ function toMember(r: MemberRow): CalendarMember {
 
 // Every calendar I own or belong to — the home view, in one round trip.
 export async function listCalendars(): Promise<Calendar[]> {
+  if (IS_DEMO) return dmListCalendars()
   if (import.meta.env.DEV && IS_SANDBOX) return (await sandbox()).sbListCalendars(sandboxName)
   if (!SUPABASE_ENABLED) return []
 
@@ -140,6 +153,7 @@ export async function listCalendars(): Promise<Calendar[]> {
 // an empty list, not an error, because the panel that calls this is only ever
 // drawn for an owner anyway.
 export async function listMembers(calendarId: string): Promise<CalendarMember[]> {
+  if (IS_DEMO) return dmListMembers(calendarId)
   if (import.meta.env.DEV && IS_SANDBOX) return (await sandbox()).sbListMembers(calendarId, sandboxName)
   if (!SUPABASE_ENABLED) return []
 
@@ -164,6 +178,7 @@ export async function createCalendar(
   maxMembers: number | null,
   features: CalendarFeatures = NO_FEATURES,
 ): Promise<{ id: string | null; error: string | null }> {
+  if (IS_DEMO) return { id: null, error: DEMO_READONLY }
   if (import.meta.env.DEV && IS_SANDBOX) {
     return (await sandbox()).sbCreateCalendar(name, maxMembers, features)
   }
@@ -189,6 +204,7 @@ export async function updateCalendar(
   maxMembers: number | null,
   features?: CalendarFeatures,
 ): Promise<string | null> {
+  if (IS_DEMO) return DEMO_READONLY
   if (import.meta.env.DEV && IS_SANDBOX) {
     return (await sandbox()).sbUpdateCalendar(calendarId, name, maxMembers, features)
   }
@@ -208,6 +224,7 @@ export async function updateCalendar(
 // Deletes the calendar and everything hanging off it — members, events, invites
 // — by ON DELETE CASCADE. Total and irreversible; the UI must confirm first.
 export async function deleteCalendar(calendarId: string): Promise<string | null> {
+  if (IS_DEMO) return DEMO_READONLY
   if (import.meta.env.DEV && IS_SANDBOX) return (await sandbox()).sbDeleteCalendar(calendarId)
   if (!SUPABASE_ENABLED) return NO_BACKEND
 
@@ -228,6 +245,7 @@ export async function deleteCalendar(calendarId: string): Promise<string | null>
 export async function approveMember(
   calendarId: string, userId: string,
 ): Promise<string | null> {
+  if (IS_DEMO) return DEMO_READONLY
   if (import.meta.env.DEV && IS_SANDBOX) return (await sandbox()).sbApproveMember(calendarId, userId)
   if (!SUPABASE_ENABLED) return NO_BACKEND
 
@@ -247,6 +265,7 @@ export async function approveMember(
 export async function rejectMember(
   calendarId: string, userId: string, reopen: boolean,
 ): Promise<string | null> {
+  if (IS_DEMO) return DEMO_READONLY
   // `reopen` has no meaning in the sandbox: there are no invite codes to put back
   // into play, because nothing minted one.
   if (import.meta.env.DEV && IS_SANDBOX) return (await sandbox()).sbRejectMember(calendarId, userId)
@@ -266,6 +285,7 @@ export async function rejectMember(
 // calendar whose members can still see your availability is not leaving. The
 // owner cannot call this (the server refuses); they delete the calendar instead.
 export async function leaveCalendar(calendarId: string): Promise<string | null> {
+  if (IS_DEMO) return DEMO_READONLY
   if (import.meta.env.DEV && IS_SANDBOX) return (await sandbox()).sbLeaveCalendar(calendarId)
   if (!SUPABASE_ENABLED) return NO_BACKEND
 
