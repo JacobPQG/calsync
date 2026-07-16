@@ -32,6 +32,8 @@
 // module is inert — a shipped bundle cannot enter sandbox mode even if the
 // localStorage key is present, because the getter never reads it.
 
+import { DEMO_HASH } from '../lib/config'
+
 export type DevMode = 'live' | 'sandbox'
 
 // The single condition under which any of this is available at all.
@@ -104,7 +106,14 @@ function resolveMode(): DevMode {
 // is pinned to live mode and cannot be talked out of it.
 export const DEV_MODE: DevMode = DEV_TOOLS ? resolveMode() : 'live'
 
-export const IS_SANDBOX: boolean = DEV_TOOLS && DEV_MODE === 'sandbox'
+// The sandbox yields ONE page load to an explicit `#demo` arrival (ADR-23), so
+// the public landing page can be previewed from the dev panel: IS_SANDBOX turns
+// off for this load, demo/demoMode.ts's hash check then activates the demo, and
+// the stored backend choice is untouched — leaving the demo clears the hash and
+// the next load is back in the sandbox. Exactly one of the two fixtures is ever
+// active; the yield is what keeps them from mixing.
+export const IS_SANDBOX: boolean =
+  DEV_TOOLS && DEV_MODE === 'sandbox' && window.location.hash !== DEMO_HASH
 
 // Switch backend and reload. The reload is the point, not a shortcut: the
 // Supabase client, the storage adapter and the seeded store are all decided at
@@ -112,12 +121,22 @@ export const IS_SANDBOX: boolean = DEV_TOOLS && DEV_MODE === 'sandbox'
 // half-connected to each backend.
 export function setDevMode(mode: DevMode): void {
   if (!DEV_TOOLS) return
+  storeDevMode(mode)
+  window.location.reload()
+}
+
+// Persist the backend choice WITHOUT reloading — for the one caller that
+// sequences its own reload: the dev panel leaving a landing-page preview goes
+// through exitDemo(), which must also clear the #demo hash before reloading
+// (or the reload would land straight back in the demo). Everyone else wants
+// setDevMode.
+export function storeDevMode(mode: DevMode): void {
+  if (!DEV_TOOLS) return
   try {
     localStorage.setItem(KEY, mode)
   } catch {
     // Nothing useful to do — without storage the choice cannot persist a reload.
   }
-  window.location.reload()
 }
 
 // True when the user is in live mode but no credentials exist to be live with.

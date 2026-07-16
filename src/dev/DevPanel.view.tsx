@@ -19,9 +19,12 @@ export function DevPanel() {
   const vm = useDevPanelVM()
   if (!vm.enabled) return null
 
-  const badge = vm.isSandbox
-    ? { text: 'Sandbox', color: '#b45309' }
-    : { text: 'Live',    color: '#7c3aed' }
+  // Demo purple matches the connection badge's demo state (App.view.tsx).
+  const badge = vm.isLanding
+    ? { text: 'Demo',    color: '#7F77DD' }
+    : vm.isSandbox
+      ? { text: 'Sandbox', color: '#b45309' }
+      : { text: 'Live',    color: '#7c3aed' }
 
   return (
     <>
@@ -66,7 +69,7 @@ export function DevPanel() {
               </span>
 
               <ModeOption
-                active={!vm.isSandbox}
+                active={!vm.isSandbox && !vm.isLanding}
                 disabled={vm.liveUnavailable}
                 onClick={() => vm.switchTo('live')}
                 title="Live — real Supabase"
@@ -79,6 +82,12 @@ export function DevPanel() {
                 onClick={() => vm.switchTo('sandbox')}
                 title="Sandbox — no backend"
                 body="localStorage only, seeded with fake people and calendars. Everything is clickable with zero setup — but there is no server, so no invites, no approval queue, and no RLS. The security model is NOT exercised here." />
+
+              <ModeOption
+                active={vm.isLanding}
+                onClick={vm.viewLanding}
+                title="Landing page — public demo"
+                body="What a signed-out visitor sees in production: the landing page with the app embedded live on the in-memory demo fixture. Nothing persists — a reload reseeds. Pick a backend above to leave." />
             </div>
 
             {/* ── Sandbox-only controls ─────────────────────────────────── */}

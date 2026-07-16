@@ -3,8 +3,11 @@
 
 import { useState } from 'react'
 import {
-  DEV_TOOLS, DEV_MODE, IS_SANDBOX, LIVE_UNAVAILABLE, setDevMode, type DevMode,
+  DEV_TOOLS, DEV_MODE, IS_SANDBOX, LIVE_UNAVAILABLE,
+  setDevMode, storeDevMode, type DevMode,
 } from './devMode'
+import { IS_DEMO, exitDemo } from '../demo/demoMode'
+import { DEMO_HASH } from '../lib/config'
 import {
   SANDBOX_PERSONA, setSandboxPersona, type SandboxPersona,
 } from './sandboxPersona'
@@ -22,6 +25,13 @@ export interface DevPanelVM {
 
   open:    boolean
   setOpen: (v: boolean) => void
+
+  // The landing-page preview (ADR-23): the sandbox yields the page load and the
+  // app renders exactly what a signed-out production visitor gets — marketing
+  // page, in-memory demo fixture, nothing persisted. viewLanding enters it;
+  // switchTo (below) leaves it for the chosen backend.
+  isLanding:   boolean
+  viewLanding: () => void
 
   // Switching backends reloads the page — see devMode.ts.
   switchTo: (mode: DevMode) => void
@@ -58,7 +68,24 @@ export function useDevPanelVM(): DevPanelVM {
 
     open, setOpen,
 
+    isLanding: IS_DEMO,
+    viewLanding: () => {
+      if (IS_DEMO) { setOpen(false); return }
+      // Mode flags resolve at module load, so entering the preview reloads —
+      // the same contract as switching backends.
+      window.location.hash = DEMO_HASH
+      window.location.reload()
+    },
+
     switchTo: (mode) => {
+      if (IS_DEMO) {
+        // Leaving the landing-page preview: persist the choice, then exitDemo
+        // clears the #demo hash (else the reload would land straight back in
+        // the demo), opts this session out of auto-entry, and reloads.
+        storeDevMode(mode)
+        exitDemo()
+        return
+      }
       if (mode === DEV_MODE) { setOpen(false); return }
       setDevMode(mode)   // reloads
     },

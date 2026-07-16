@@ -36,6 +36,13 @@ export const INVITE_HASH_KEY = 'invite'
 // is a sanity check on URL input, not a security control — the server decides.
 export const INVITE_CODE_PATTERN = /^[a-f0-9]{16,64}$/
 
+// URL fragment that opens the public landing page / demo: <site>/#demo. A
+// fragment, like #invite= and #share=, so the hash-routing convention holds.
+// Lives here (not in demo/demoMode.ts) because BOTH mode-resolution modules
+// need it — demo/demoMode.ts to activate, dev/devMode.ts to make the sandbox
+// yield to it (ADR-23) — and importing one from the other would be a cycle.
+export const DEMO_HASH = '#demo'
+
 // How long a QR invite stays claimable. A QR is a bearer token — whoever scans
 // it first gets the account — so it expires by default rather than lingering.
 // The admin can override it per invite (see INVITE_LIFETIME_OPTIONS).

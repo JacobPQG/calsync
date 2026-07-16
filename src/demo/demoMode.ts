@@ -34,10 +34,9 @@
 // — it is the absence of Supabase, not a bypass of its rules.
 
 import { IS_SANDBOX } from '../dev/devMode'
-
-// The shareable landing-page URL fragment: <site>/#demo. A fragment, like
-// #invite= and #share=, so the existing hash-routing convention holds.
-export const DEMO_HASH = '#demo'
+// The shareable landing-page URL fragment (<site>/#demo) lives in lib/config —
+// dev/devMode.ts needs it too, and importing it from here would be a cycle.
+import { DEMO_HASH } from '../lib/config'
 
 // sessionStorage, deliberately not localStorage: leaving the demo should stick
 // for this visit (no redirect loop after "Sign in"), but a fresh visit later
@@ -81,6 +80,10 @@ function resolveDemo(): boolean {
 
 // The sandbox wins when both could apply (local dev with test mode): it is the
 // developer's explicit backend choice, and the two fixtures must never mix.
+// One exception, made on the sandbox's side (ADR-23): an explicit #demo
+// arrival makes IS_SANDBOX yield for that page load — the dev panel's
+// landing-page preview — so this resolves true. Either way exactly one of the
+// two fixtures is active.
 export const IS_DEMO: boolean = !IS_SANDBOX && resolveDemo()
 
 // Leave the demo for the real app — the landing page's "Sign in" / "Open the
