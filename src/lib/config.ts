@@ -84,3 +84,70 @@ export const MAX_CALENDAR_SEATS = 500
 // Most invites the bulk minter will send in one request. Mirrors the limit in
 // mint_calendar_invites().
 export const MAX_BULK_INVITES = 100
+
+// ── Discover: event suggestions + weekend-trip scanning (ADR-22) ──────────────
+// All Discover keys are OPTIONAL: with none set, the AI copy/paste source still
+// works (the user is the transport), so the feature never depends on a key.
+// Every VITE_ value below ships readable in the static bundle — that is
+// acceptable ONLY for free-tier, rate-limited keys whose worst-case abuse is
+// draining their own quota. Never put a paid or production credential here;
+// that needs a server-side proxy (e.g. a Supabase Edge Function) first.
+
+// Ticketmaster Discovery API — free key from developer.ticketmaster.com.
+// Public-safe by design (rate-limited lookup key, like the Supabase anon key).
+export const TICKETMASTER_API_KEY: string =
+  (import.meta.env.VITE_TICKETMASTER_API_KEY as string | undefined) ?? ''
+export const TICKETMASTER_API_BASE: string =
+  (import.meta.env.VITE_TICKETMASTER_API_BASE as string | undefined)
+  ?? 'https://app.ticketmaster.com/discovery/v2'
+
+// Google Gemini — free-tier key from aistudio.google.com. Free tier only; see
+// the exposure note above.
+export const GEMINI_API_KEY: string =
+  (import.meta.env.VITE_GEMINI_API_KEY as string | undefined) ?? ''
+export const GEMINI_MODEL: string =
+  (import.meta.env.VITE_GEMINI_MODEL as string | undefined) ?? 'gemini-2.0-flash'
+export const GEMINI_API_BASE: string =
+  (import.meta.env.VITE_GEMINI_API_BASE as string | undefined)
+  ?? 'https://generativelanguage.googleapis.com/v1beta'
+
+// Search-window defaults and bounds (months ahead from today).
+export const DISCOVER_DEFAULT_MONTHS_AHEAD: number =
+  Number(import.meta.env.VITE_DISCOVER_DEFAULT_MONTHS_AHEAD) || 2
+export const DISCOVER_MAX_MONTHS_AHEAD: number =
+  Number(import.meta.env.VITE_DISCOVER_MAX_MONTHS_AHEAD) || 12
+
+// Result caps: per source per location, and overall after merging — keeps one
+// search from flooding the panel (and the localStorage cache) with hundreds of
+// rows.
+export const DISCOVER_MAX_PER_SOURCE = 50
+export const DISCOVER_MAX_SUGGESTIONS = 100
+
+// Amadeus Self-Service (flight + hotel prices) — free TEST-environment key
+// from developers.amadeus.com. Test prices are indicative, not bookable fares.
+// The default base is the test host; do not point this at production while the
+// credentials ship in the bundle (see the exposure note above and amadeus.ts).
+export const AMADEUS_CLIENT_ID: string =
+  (import.meta.env.VITE_AMADEUS_CLIENT_ID as string | undefined) ?? ''
+export const AMADEUS_CLIENT_SECRET: string =
+  (import.meta.env.VITE_AMADEUS_CLIENT_SECRET as string | undefined) ?? ''
+export const AMADEUS_API_BASE: string =
+  (import.meta.env.VITE_AMADEUS_API_BASE as string | undefined)
+  ?? 'https://test.api.amadeus.com'
+
+// Trip-scan defaults: budget threshold preset in the form (flight + hotel per
+// person) and its currency. Both are starting values the user changes freely.
+export const TRAVEL_DEFAULT_MAX_TOTAL: number =
+  Number(import.meta.env.VITE_TRAVEL_DEFAULT_MAX_TOTAL) || 250
+export const TRAVEL_DEFAULT_CURRENCY: string =
+  (import.meta.env.VITE_TRAVEL_DEFAULT_CURRENCY as string | undefined) ?? 'EUR'
+
+// Politeness caps on the Amadeus scan: candidates quoted per click, hotels
+// priced per city query, and how long a quote stays "fresh" before a rescan
+// re-fetches it. A six-month watch across several cities is dozens of
+// weekends; these keep one click from spending the whole free-tier quota.
+export const TRAVEL_MAX_SCANS_PER_RUN: number =
+  Number(import.meta.env.VITE_TRAVEL_MAX_SCANS_PER_RUN) || 10
+export const TRAVEL_HOTELS_PER_QUERY = 15
+export const TRAVEL_QUOTE_STALE_HOURS: number =
+  Number(import.meta.env.VITE_TRAVEL_QUOTE_STALE_HOURS) || 24

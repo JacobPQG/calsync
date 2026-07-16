@@ -20,6 +20,7 @@ import { ClaimScreen }   from './invite/ClaimScreen'
 import { InvitePanel }   from './invite/InvitePanel'
 import { HomeView }      from './calendars/HomeView'
 import { CalendarAdmin } from './calendars/CalendarAdmin'
+import { DiscoverPanel } from './discover/DiscoverPanel'
 import { LandingPage }   from './landing/LandingPage'
 import { DevPanel }      from './dev/DevPanel'
 import { avatarEmoji }   from './auth/credentials'
@@ -210,6 +211,14 @@ export default function App() {
               </button>
             )}
 
+            {/* Discover: suggested events + weekend-trip deals (ADR-22). The
+                panel gates its own "add" actions on a real calendar being open,
+                so it can be browsed from the overview too. */}
+            <button className="btn-toolbar shrink-0" onClick={() => vm.setShowDiscoverPanel(true)}
+              title="Find events near you and cheap weekend trips">
+              ✨ Discover
+            </button>
+
             {!vm.isOverview && (
               <button className="btn-toolbar shrink-0" onClick={vm.handleShare} disabled={!vm.activeUserId}
                 title={vm.activeUserId ? 'Copy a link containing only your own availability' : 'Select a user first'}
@@ -394,6 +403,7 @@ export default function App() {
       {/* ── Overlays ─────────────────────────────────────────────────────── */}
       {vm.showAuthModal && <AuthModal onClose={() => vm.setShowAuthModal(false)} />}
       {vm.showStatsPanel && <StatsPanel onClose={() => vm.setShowStatsPanel(false)} />}
+      {vm.showDiscoverPanel && <DiscoverPanel onClose={() => vm.setShowDiscoverPanel(false)} />}
       {vm.showInvitePanel && <InvitePanel onClose={() => vm.setShowInvitePanel(false)} />}
 
       {/* A calendar's own admin panel: members, bulk QR invites, settings. */}

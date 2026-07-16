@@ -107,6 +107,10 @@ export interface AppVM {
   showUserPanel:   boolean; setShowUserPanel:   (v: boolean) => void
   showAuthModal:   boolean; setShowAuthModal:   (v: boolean) => void
   showStatsPanel:  boolean; setShowStatsPanel:  (v: boolean) => void
+  // Discover (ADR-22): suggested events + weekend-trip deals. Openable in any
+  // calendar view — the panel itself gates the "add" actions on a real (non-
+  // overview) calendar being open, with an explanatory hint.
+  showDiscoverPanel: boolean; setShowDiscoverPanel: (v: boolean) => void
 
   // Fast user-create.
   newName:        string; setNewName: (v: string) => void
@@ -141,6 +145,7 @@ export function useAppVM(): AppVM {
   const [showUserPanel,  setShowUserPanel]  = useState(false)
   const [showAuthModal,  setShowAuthModal]  = useState(false)
   const [showStatsPanel, setShowStatsPanel] = useState(false)
+  const [showDiscoverPanel, setShowDiscoverPanel] = useState(false)
   const [shareCopied,    setShareCopied]    = useState(false)
   const [importFeedback, setImportFeedback] = useState<string | null>(null)
   const [adminCalendarId, setAdminCalendarId] = useState<string | null>(null)
@@ -375,6 +380,7 @@ export function useAppVM(): AppVM {
     showUserPanel,  setShowUserPanel,
     showAuthModal,  setShowAuthModal,
     showStatsPanel, setShowStatsPanel,
+    showDiscoverPanel, setShowDiscoverPanel,
 
     newName, setNewName,
     canCreateUser: newName.trim().length >= 2,
